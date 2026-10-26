@@ -1,0 +1,18 @@
+{
+  "version": "2026.10.26",
+  "schema": 2,
+  "built_at": "2026-10-26T08:12:44+00:00",
+  "file": "quickdic.db.gz",
+  "gz_size": 145098925,
+  "gz_sha256": "9d8e0bab28f93eed592c40cdd51f3076926db5bab3bf7dfd5faf2cceab560b6b",
+  "db_size": 221388800,
+  "en_source": "Wed, 21 Oct 2026 11:23:03 GMT",
+  "ko_source": "Wed, 21 Oct 2026 11:25:38 GMT",
+  "counts": {
+    "ko_ko": 72307,
+    "ko_en": 16658,
+    "en_en": 1300074,
+    "ko_en_pairs": 44135,
+    "en_ko": 53573
+  }
+}
