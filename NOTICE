@@ -1,0 +1,15 @@
+QuickDic
+
+사전 데이터 출처 / Dictionary data
+----------------------------------
+QuickDic 이 내려받아 사용하는 사전 파일(quickdic.db)은 Wiktionary(위키낱말사전)의
+영어판(en.wiktionary.org)과 한국어판(ko.wiktionary.org) 내용을 가공한 것입니다.
+
+- 원저작자: Wiktionary contributors
+- 라이선스: Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0) 및 GNU Free Documentation License (GFDL)
+  https://creativecommons.org/licenses/by-sa/4.0/
+- 추출 데이터: kaikki.org (Tatu Ylonen, "Wiktextract: Wiktionary as Machine-Readable Structured Data", LREC 2022)
+  https://kaikki.org/
+
+가공된 사전 파일 역시 같은 조건(CC BY-SA 4.0)으로 배포됩니다.
+The derived dictionary file is distributed under the same license (CC BY-SA 4.0).

@@ -1,0 +1,63 @@
+name: 앱 만들기 (Windows exe)
+
+# Actions 탭 → '앱 만들기' → Run workflow → 버전 입력 → 실행하면
+# QuickDic.exe 를 만들어 릴리스 페이지에 올립니다.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "버전 번호 (예: 1.0.0)"
+        required: true
+        default: "1.0.0"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"   # 한글 출력이 깨지지 않게
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 빌드 도구 설치
+        run: pip install pyinstaller
+
+      - name: 기본 동작 점검
+        run: |
+          python tests/make_sample.py sample
+          python tools/build_db.py --en sample/en.jsonl.gz --ko sample/ko.jsonl.gz --out sample/test.db
+          python tests/smoke_test.py sample/test.db
+
+      - name: 버전·저장소 정보 넣기
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") { $v = "v${{ github.event.inputs.version }}" } else { $v = "${{ github.ref_name }}" }
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          @"
+          APP_VERSION = "$v"
+          GITHUB_REPO = "${{ github.repository }}"
+          "@ | Out-File -FilePath app/build_info.py -Encoding utf8
+          Get-Content app/build_info.py
+
+      - name: exe 만들기
+        run: >
+          pyinstaller --noconfirm --onefile --windowed --name QuickDic
+          --icon assets/quickdic.ico --add-data "assets/quickdic.ico;assets"
+          --paths app app/quickdic.py
+
+      - name: 릴리스에 올리기
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" dist/QuickDic.exe \
+            --title "QuickDic $VERSION" --notes-file RELEASE_NOTES.md --latest \
+            || gh release upload "$VERSION" dist/QuickDic.exe --clobber

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+app/build_info.py
+data/
+*.db
+*.db.gz
+*.db.new
+*.building
+version.json

@@ -1,0 +1,72 @@
+name: 사전 데이터 만들기 (주 1회)
+
+# 매주 위키낱말사전 최신 데이터를 받아 QuickDic 사전 파일을 만들고
+# 'dictionary' 릴리스에 올립니다. 앱은 이 파일을 자동으로 받아 갑니다.
+on:
+  schedule:
+    - cron: "17 18 * * 0"   # 매주 월요일 03:17 (한국 시간)
+  workflow_dispatch:         # Actions 탭에서 'Run workflow' 로 바로 실행 가능
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dictionary
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 빠른 JSON 처리 도구 설치
+        run: pip install orjson
+
+      - name: 위키낱말사전 원본 데이터 내려받기 (영어판 약 3GB, 한국어판 약 26MB)
+        run: |
+          mkdir -p data
+          EN_URL=https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz
+          KO_URL=https://kaikki.org/dictionary/downloads/ko/ko-extract.jsonl.gz
+          echo "EN_DATE=$(curl -sIL $EN_URL | grep -i '^last-modified' | tail -1 | cut -d' ' -f2- | tr -d '\r')" >> "$GITHUB_ENV"
+          echo "KO_DATE=$(curl -sIL $KO_URL | grep -i '^last-modified' | tail -1 | cut -d' ' -f2- | tr -d '\r')" >> "$GITHUB_ENV"
+          curl -fL --retry 5 --retry-delay 60 -o data/ko.jsonl.gz $KO_URL
+          curl -fL --retry 5 --retry-delay 60 -o data/en.jsonl.gz $EN_URL
+          ls -lh data
+
+      - name: SQLite 사전 만들기
+        run: |
+          python tools/build_db.py \
+            --en data/en.jsonl.gz --ko data/ko.jsonl.gz --out quickdic.db \
+            --version "$(date -u +%Y.%m.%d)" --en-date "$EN_DATE" --ko-date "$KO_DATE"
+          rm -rf data
+
+      - name: 압축하고 버전 정보 만들기
+        run: |
+          python tools/package_db.py quickdic.db
+          ls -lh quickdic.db quickdic.db.gz
+
+      - name: 릴리스에 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view dictionary >/dev/null 2>&1 || \
+            gh release create dictionary --prerelease --title "사전 데이터 (자동 갱신)" \
+              --notes "QuickDic 앱이 자동으로 받아 가는 사전 파일입니다. 매주 갱신됩니다. 데이터 출처: Wiktionary (CC BY-SA 4.0 / GFDL), kaikki.org"
+          # 사전 파일을 먼저, 버전 정보를 나중에 올려야 앱이 새 파일을 받습니다
+          gh release upload dictionary quickdic.db.gz --clobber
+          gh release upload dictionary version.json --clobber
+
+      - name: 저장소에 갱신 기록 남기기 (60일 넘게 활동이 없으면 예약 실행이 멈추는 것 방지)
+        run: |
+          cp version.json dictionary-version.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dictionary-version.json
+          git commit -m "사전 데이터 갱신 $(date -u +%Y-%m-%d)" || echo "변경 없음"
+          git push
