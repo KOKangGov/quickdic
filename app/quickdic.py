@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import queue
-import re
 import sys
 import threading
 import tkinter as tk
@@ -105,9 +104,14 @@ class App:
         self.result: Result | None = None
         self.links: dict[str, str] = {}
         self.hotkey: winsys.HotkeyListener | None = None
-        self._geom_job = None
         self._sugg_job = None
         self._collapse_job = None
+        self._anim_job = None
+        self._drag = None
+        self._rs = None
+        self.expanded = False
+        self.direction = "up"
+        self.placeholder_msg = ""
         self.app_update_url = ""
 
         self._init_fonts()
@@ -136,77 +140,107 @@ class App:
     def _build_ui(self):
         r = self.root
         r.title(TITLE)
-        r.configure(bg=C["bg"])
-        r.minsize(300, 120)
+        r.configure(bg=C["line"])
+        r.overrideredirect(True)  # 제목 표시줄 없는 '검색창 막대' 형태
         try:
             r.iconbitmap(config.resource_path("assets/quickdic.ico"))
         except Exception:
             pass
         style = ttk.Style(r)
-        style.configure("QD.TNotebook", background=C["bg"], borderwidth=0)
+        style.configure("QD.TNotebook", background=C["panel"], borderwidth=0)
         style.configure("QD.TNotebook.Tab", padding=(14, 4), font=self.f["ui"])
         style.configure("QD.TCheckbutton", background=C["panel"], font=self.f["small"])
 
-        # ── 1. 상단 도구 막대
-        bar = tk.Frame(r, bg=C["bg"])
-        bar.pack(fill="x", padx=8, pady=(6, 2))
-        tk.Label(bar, text="QuickDic", bg=C["bg"], fg=C["accent"], font=self.f["brand"]).pack(side="left")
-        self.btn_fold = FlatButton(bar, "접기 ▲", self.toggle_collapse, font=self.f["small"], tip="창 접기/펼치기 (Esc)")
-        self.btn_fold.pack(side="right")
-        FlatButton(bar, "설정", self.open_settings, font=self.f["small"], tip="설정").pack(side="right")
-        FlatButton(bar, "단어장", self.open_wordbook, font=self.f["small"], tip="저장한 단어 보기").pack(side="right")
-        FlatButton(bar, "웹사전", self.open_web, font=self.f["small"],
-                   tip="지금 단어를 포털 사전에서 열기").pack(side="right")
-        self.btn_pin = FlatButton(bar, "고정", self.toggle_topmost, font=self.f["small"], tip="항상 위에 표시")
-        self.btn_pin.pack(side="right")
+        # 얇은 테두리 안에 모든 것을 담는다
+        self.outer = tk.Frame(r, bg=C["bg"])
+        self.outer.pack(fill="both", expand=True, padx=1, pady=1)
 
-        # ── 2. 검색 막대
-        sf = tk.Frame(r, bg=C["bg"])
-        sf.pack(fill="x", padx=8, pady=(2, 4))
-        self.search_frame = sf
-        box = tk.Frame(sf, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"],
+        # ── 검색 막대 (항상 보임)
+        bar = tk.Frame(self.outer, bg=C["bg"])
+        self.bar = bar
+        grip = tk.Label(bar, text="⋮⋮", bg=C["bg"], fg=C["dim"], font=self.f["ui_b"], cursor="fleur", padx=3)
+        grip.pack(side="left", padx=(4, 0))
+        Tooltip(grip, "끌어서 옮기기")
+        self._bind_drag(grip)
+        box = tk.Frame(bar, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"],
                        highlightcolor=C["accent"])
-        box.pack(side="left", fill="x", expand=True)
+        box.pack(side="left", fill="x", expand=True, pady=5)
         self.entry = tk.Entry(box, font=self.f["entry"], relief="flat", bg=C["panel"], fg=C["text"],
                               insertbackground=C["text"])
-        self.entry.pack(side="left", fill="x", expand=True, padx=(8, 2), ipady=4)
+        self.entry.pack(side="left", fill="x", expand=True, padx=(8, 2), ipady=3)
         FlatButton(box, "✕", self.clear, bg=C["panel"], fg=C["dim"], font=self.f["ui"], tip="지우기").pack(side="right")
-        FlatButton(sf, "검색", lambda: self.search(self.entry_text()), bg=C["accent"], fg="white",
-                   hover=C["accent_dk"], font=self.f["ui_b"], padx=12, pady=5).pack(side="left", padx=(6, 0))
+        FlatButton(bar, "검색", lambda: self.search(self.entry_text()), bg=C["accent"], fg="white",
+                   hover=C["accent_dk"], font=self.f["ui_b"], padx=10, pady=4).pack(side="left", padx=(5, 0))
+        self.btn_menu = FlatButton(bar, "≡", self.show_menu, font=(self.f["ui_b"][0], self.f["ui_b"][1] + 3),
+                                   padx=6, pady=0, tip="메뉴")
+        self.btn_menu.pack(side="left", padx=(2, 4))
+
         self._placeholder_on = False
         self._set_placeholder()
+        self.entry.bind("<Button-1>", lambda e: self.root.focus_force(), add="+")
         self.entry.bind("<FocusIn>", self._clear_placeholder)
         self.entry.bind("<FocusOut>", lambda e: (self._set_placeholder(), self._hide_suggest_later()))
-        self.entry.bind("<Return>", lambda e: self.search(self.entry_text()))
+        self.entry.bind("<Return>", self._on_enter)
         self.entry.bind("<KeyRelease>", self._on_type)
-        self.entry.bind("<Down>", self._focus_suggest)
+        self.entry.bind("<Down>", lambda e: self._move_suggest(1))
+        self.entry.bind("<Up>", lambda e: self._move_suggest(-1))
         r.bind("<Escape>", lambda e: self._on_escape())
         r.bind("<Control-l>", lambda e: self.focus_entry())
         for i in range(3):
             r.bind(f"<Control-Key-{i+1}>", lambda e, i=i: self.nb.select(i))
 
-        # 자동완성 목록 (검색창 아래에 겹쳐서 표시)
-        self.sugg = tk.Listbox(r, font=self.f["body"], activestyle="none", relief="solid", bd=1,
-                               highlightthickness=0, selectbackground=C["on"], selectforeground=C["text"])
-        self.sugg.bind("<ButtonRelease-1>", lambda e: self._pick_suggest())
-        self.sugg.bind("<Return>", lambda e: self._pick_suggest())
-        def sugg_escape(_e):
-            self._hide_suggest()
-            self.focus_entry()
-            return "break"
-        self.sugg.bind("<Escape>", sugg_escape)
-        self.sugg.bind("<FocusOut>", lambda e: self._hide_suggest_later())
+        # 메뉴 (≡)
+        self.var_top = tk.BooleanVar(value=bool(self.settings["topmost"]))
+        m = tk.Menu(r, tearoff=0, font=self.f["ui"])
+        m.add_command(label="결과창 열기/닫기   Esc", command=self.toggle_panel)
+        m.add_checkbutton(label="항상 위에 표시", variable=self.var_top,
+                          command=lambda: self.set_topmost(self.var_top.get()))
+        m.add_separator()
+        m.add_command(label="웹사전에서 열기", command=self.open_web)
+        m.add_command(label="단어장", command=self.open_wordbook)
+        m.add_command(label="설정", command=self.open_settings)
+        m.add_command(label="사용법", command=lambda: (self._show_welcome(), self.expand()))
+        m.add_separator()
+        m.add_command(label="QuickDic 종료", command=self.quit)
+        self.menu = m
 
-        # ── 3. 접히는 본문
-        self.body = tk.Frame(r, bg=C["bg"])
-        self.body.pack(fill="both", expand=True)
+        # ── 결과창: clip(보이는 영역) 안에 panel 을 place 로 붙여 '스르륵' 드러나게 함
+        self.clip = tk.Frame(self.outer, bg=C["bg"])
+        self.panel = tk.Frame(self.clip, bg=C["bg"])
+
+        top = tk.Frame(self.panel, bg=C["bg"])
+        top.pack(fill="x", padx=8, pady=(5, 2))
+        brand = tk.Label(top, text="QuickDic", bg=C["bg"], fg=C["accent"], font=self.f["brand"], cursor="fleur")
+        brand.pack(side="left")
+        self._bind_drag(brand)
+        self._bind_drag(top)
+        self.btn_size = tk.Label(top, text="⤢", bg=C["bg"], fg=C["dim"], font=self.f["ui_b"], cursor="sizing", padx=4)
+        self.btn_size.pack(side="right")
+        Tooltip(self.btn_size, "끌어서 결과창 크기 조절")
+        self._bind_resize(self.btn_size)
+        FlatButton(top, "닫기 ▼", self.collapse, font=self.f["small"], tip="결과창 닫기 (Esc)").pack(side="right")
+        FlatButton(top, "단어장", self.open_wordbook, font=self.f["small"], tip="저장한 단어 보기").pack(side="right")
+        FlatButton(top, "웹사전", self.open_web, font=self.f["small"],
+                   tip="지금 단어를 포털 사전에서 열기").pack(side="right")
+        self.btn_pin = FlatButton(top, "고정", lambda: self.set_topmost(not self.settings["topmost"]),
+                                  font=self.f["small"], tip="항상 위에 표시")
+        self.btn_pin.pack(side="right")
 
         # 최근 검색 칩
-        self.chips = tk.Frame(self.body, bg=C["bg"])
+        self.chips = tk.Frame(self.panel, bg=C["bg"])
         self.chips.pack(fill="x", padx=8, pady=(0, 4))
 
-        card = tk.Frame(self.body, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"])
-        card.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        # 상태 표시줄 (아래쪽에 먼저 붙여서 카드가 남은 공간을 채우게)
+        st = tk.Frame(self.panel, bg=C["bg"])
+        st.pack(side="bottom", fill="x", padx=10, pady=(0, 2))
+        self.lbl_status = tk.Label(st, text="", bg=C["bg"], fg=C["dim"], font=self.f["small"], anchor="w")
+        self.lbl_status.pack(side="left", fill="x", expand=True)
+        self.lbl_status.bind("<Button-1>", lambda e: self.app_update_url and winsys.open_url(self.app_update_url))
+        self.lbl_hint = tk.Label(st, text="", bg=C["bg"], fg=C["dim"], font=self.f["small"])
+        self.lbl_hint.pack(side="right")
+
+        card = tk.Frame(self.panel, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"])
+        card.pack(fill="both", expand=True, padx=8, pady=(0, 3))
 
         head = tk.Frame(card, bg=C["panel"])
         head.pack(fill="x", padx=10, pady=(8, 2))
@@ -233,19 +267,21 @@ class App:
                                 command=self._toggle_english).pack(anchor="e", padx=6, pady=(2, 0))
             self.tabs[key] = self._make_text(frame)
 
-        # ── 4. 상태 표시줄
-        st = tk.Frame(self.body, bg=C["bg"])
-        st.pack(fill="x", padx=10, pady=(0, 5))
-        self.lbl_status = tk.Label(st, text="", bg=C["bg"], fg=C["dim"], font=self.f["small"], anchor="w")
-        self.lbl_status.pack(side="left", fill="x", expand=True)
-        self.lbl_status.bind("<Button-1>", lambda e: self.app_update_url and winsys.open_url(self.app_update_url))
-        self.lbl_hint = tk.Label(st, text="", bg=C["bg"], fg=C["dim"], font=self.f["small"])
-        self.lbl_hint.pack(side="right")
+        # 자동완성 목록: 검색 막대 위(또는 아래)에 뜨는 작은 팝업
+        self.sugg_win = tk.Toplevel(r)
+        self.sugg_win.overrideredirect(True)
+        self.sugg_win.attributes("-topmost", True)
+        self.sugg_win.withdraw()
+        self.sugg = tk.Listbox(self.sugg_win, font=self.f["body"], activestyle="none", relief="solid", bd=1,
+                               highlightthickness=0, selectbackground=C["on"], selectforeground=C["text"])
+        self.sugg.pack(fill="both", expand=True)
+        self.sugg.bind("<ButtonRelease-1>", lambda e: self._pick_suggest())
 
-        r.protocol("WM_DELETE_WINDOW", self.quit)
-        r.bind("<Configure>", self._on_configure)
+        # Alt+F4 등으로 창을 닫으려 해도 종료하지 않고 결과창만 닫음 (종료는 ≡ 메뉴에서만)
+        r.protocol("WM_DELETE_WINDOW", self.collapse)
         r.bind("<FocusOut>", self._on_root_focus_out)
 
+        self._layout("up")
         self._refresh_chips()
         self._show_welcome()
 
@@ -286,60 +322,157 @@ class App:
         t.config(state="disabled")
         return t
 
-    # ------------------------------------------------------------------ 창 설정
+    # ------------------------------------------------------------------ 창 위치·크기
+    #  위치는 '검색 막대의 왼쪽 위' 좌표(bar_x, bar_y)로 기억한다.
+    #  결과창은 화면 공간이 있으면 검색 막대 위로, 없으면 아래로 펼친다.
+
+    def _bar_h(self) -> int:
+        self.root.update_idletasks()
+        return self.bar.winfo_reqheight() + 2
+
+    def _width(self) -> int:
+        return max(300, int(self.settings["width"]))
+
+    def _panel_h(self) -> int:
+        sh = self.root.winfo_screenheight()
+        return max(220, min(int(self.settings["panel_height"]), sh - self._bar_h() - 40))
+
     def _apply_window_settings(self):
         r = self.root
         sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
-        geo = self.settings["geometry"] or ""
-        ok = False
-        m = re.match(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$", geo)
-        if m:
-            w, h, x, y = (int(v) for v in m.groups())
-            # 모니터 구성이 바뀌어 화면 밖에 있으면 기본 위치로
-            ok = -w + 60 < x < sw - 60 and -10 < y < sh - 60 and w >= 280
-            if ok:
-                r.geometry(f"{w}x{h}+{x}+{y}")
-        if not ok:
-            w, h = 430, int(self.settings["expanded_height"] or 560)
-            r.geometry(f"{w}x{h}+{max(0, sw - w - 40)}+90")
+        w, bh = self._width(), self._bar_h()
+        x, y = self.settings["bar_x"], self.settings["bar_y"]
+        ok = isinstance(x, int) and isinstance(y, int) and -w + 80 < x < sw - 80 and 0 <= y < sh - bh
+        if not ok:  # 처음이거나 모니터 구성이 바뀐 경우: 화면 오른쪽 아래(작업 표시줄 위)
+            x, y = sw - w - 40, sh - bh - 110
+            self.settings["bar_x"], self.settings["bar_y"] = x, y
+        r.geometry(f"{w}x{bh}+{x}+{y}")
         self.set_topmost(bool(self.settings["topmost"]))
         self.set_opacity(int(self.settings["opacity"]))
-        if self.settings["collapsed"]:
-            r.after(50, self.collapse)
+        if not self.settings["welcomed"] or not os.path.exists(config.DB_PATH):
+            self.settings["welcomed"] = True
+            r.after(400, self.expand)
 
-    def _on_configure(self, e):
-        if e.widget is not self.root:
-            return
-        if self._geom_job:
-            self.root.after_cancel(self._geom_job)
-        self._geom_job = self.root.after(700, self._save_geometry)
-
-    def _save_geometry(self):
-        self._geom_job = None
-        if self.root.state() != "normal":
-            return
-        g = self.root.geometry()
-        if self.settings["collapsed"]:
-            # 접힌 상태에서는 위치만 저장하고 높이는 펼친 높이 유지
-            try:
-                size, pos = g.split("+", 1)
-                w = size.split("x")[0]
-                g = f"{w}x{int(self.settings['expanded_height'])}+{pos}"
-            except Exception:
-                return
+    def _layout(self, direction: str):
+        """검색 막대와 결과창의 위아래 배치"""
+        self.direction = direction
+        self.bar.pack_forget()
+        self.clip.pack_forget()
+        if direction == "up":
+            self.bar.pack(side="bottom", fill="x")
         else:
-            self.settings["expanded_height"] = self.root.winfo_height()
-        self.settings["geometry"] = g
+            self.bar.pack(side="top", fill="x")
+        if self.expanded:
+            self.clip.pack(side="top", fill="both", expand=True)
+        self._place_panel()
+
+    def _place_panel(self):
+        ph = self._panel_h()
+        self.panel.place_forget()  # 이전 배치 값(rely 등)이 남지 않도록 초기화
+        if self.direction == "up":   # 결과창 아래쪽이 검색 막대에 붙어서 위로 드러남
+            self.panel.place(x=0, rely=1.0, anchor="sw", relwidth=1.0, height=ph)
+        else:                         # 아래로 펼칠 때는 위쪽이 검색 막대에 붙음
+            self.panel.place(x=0, y=0, anchor="nw", relwidth=1.0, height=ph)
+
+    def _set_geometry(self, h: int):
+        w, bh = self._width(), self._bar_h()
+        x, by = int(self.settings["bar_x"]), int(self.settings["bar_y"])
+        y = by - (h - bh) if self.direction == "up" else by
+        self.root.geometry(f"{w}x{int(h)}+{x}+{int(y)}")
+
+    def _animate(self, start: int, end: int, done=None, ms: int = 170):
+        if self._anim_job:
+            self.root.after_cancel(self._anim_job)
+        steps = max(1, ms // 12)
+
+        def step(i=1):
+            t = i / steps
+            ease = 1 - (1 - t) ** 3          # 처음엔 빠르고 끝에서 부드럽게 멈춤
+            self._set_geometry(round(start + (end - start) * ease))
+            if i < steps:
+                self._anim_job = self.root.after(12, step, i + 1)
+            else:
+                self._anim_job = None
+                if done:
+                    done()
+        step()
+
+    def expand(self):
+        if self.expanded:
+            self.root.lift()
+            return
+        self._hide_suggest()
+        bh, ph = self._bar_h(), self._panel_h()
+        # 위쪽에 결과창이 들어갈 공간이 없으면 아래로 펼침
+        self.expanded = True
+        self._layout("up" if int(self.settings["bar_y"]) - ph >= 0 else "down")
+        self._animate(bh, bh + ph)
+
+    def collapse(self):
+        if not self.expanded:
+            return
+        self._hide_suggest()
+        bh, cur = self._bar_h(), self.root.winfo_height()
+
+        def done():
+            self.expanded = False
+            self.clip.pack_forget()
+            self._set_geometry(bh)
+        self._animate(cur, bh, done, ms=140)
+
+    def toggle_panel(self):
+        self.collapse() if self.expanded else self.expand()
+
+    # 끌어서 옮기기
+    def _bind_drag(self, widget):
+        widget.bind("<ButtonPress-1>", self._drag_start, add="+")
+        widget.bind("<B1-Motion>", self._drag_move, add="+")
+        widget.bind("<ButtonRelease-1>", self._drag_end, add="+")
+
+    def _drag_start(self, e):
+        self._drag = (e.x_root - self.root.winfo_x(), e.y_root - self.root.winfo_y())
+
+    def _drag_move(self, e):
+        if not self._drag:
+            return
+        x, y = e.x_root - self._drag[0], e.y_root - self._drag[1]
+        self.root.geometry(f"+{x}+{y}")
+
+    def _drag_end(self, _e):
+        if not self._drag:
+            return
+        self._drag = None
+        x, y, h = self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_height()
+        bh = self._bar_h()
+        self.settings["bar_x"] = x
+        self.settings["bar_y"] = y + h - bh if (self.expanded and self.direction == "up") else y
         self.settings.save()
+
+    # 끌어서 크기 조절 (오른쪽으로 → 넓게, 결과창 바깥쪽으로 → 높게)
+    def _bind_resize(self, widget):
+        widget.bind("<ButtonPress-1>", self._resize_start)
+        widget.bind("<B1-Motion>", self._resize_move)
+        widget.bind("<ButtonRelease-1>", lambda e: (setattr(self, "_rs", None), self.settings.save()))
+
+    def _resize_start(self, e):
+        self._rs = (e.x_root, e.y_root, self._width(), self._panel_h())
+
+    def _resize_move(self, e):
+        if not self._rs:
+            return
+        x0, y0, w0, h0 = self._rs
+        dy = (y0 - e.y_root) if self.direction == "up" else (e.y_root - y0)
+        self.settings["width"] = max(300, w0 + e.x_root - x0)
+        self.settings["panel_height"] = max(220, h0 + dy)
+        self._place_panel()
+        self._set_geometry(self._bar_h() + self._panel_h())
 
     def set_topmost(self, on: bool):
         self.settings["topmost"] = on
+        self.var_top.set(on)
         self.root.attributes("-topmost", on)
         self.btn_pin.set_active(on)
         self.btn_pin.config(text="고정됨" if on else "고정")
-
-    def toggle_topmost(self):
-        self.set_topmost(not self.settings["topmost"])
         self.settings.save()
 
     def set_opacity(self, pct: int):
@@ -350,58 +483,42 @@ class App:
         except tk.TclError:
             pass
 
-    # ------------------------------------------------------------------ 접기/펼치기
-    def collapse(self):
-        if self.body.winfo_manager():
-            if not self.settings["collapsed"]:
-                self.settings["expanded_height"] = self.root.winfo_height()
-            self.body.pack_forget()
-        self._hide_suggest()
-        self.settings["collapsed"] = True
-        self.btn_fold.config(text="펼치기 ▼")
-        self.root.update_idletasks()
-        w = self.root.winfo_width()
-        h = self.root.winfo_reqheight()
-        self.root.geometry(f"{w}x{h}")
-        self.settings.save()
-
-    def expand(self):
-        if not self.body.winfo_manager():
-            self.body.pack(fill="both", expand=True)
-        self.settings["collapsed"] = False
-        self.btn_fold.config(text="접기 ▲")
-        w = self.root.winfo_width()
-        h = int(self.settings["expanded_height"] or 560)
-        self.root.geometry(f"{w}x{max(h, 260)}")
-        self.settings.save()
-
-    def toggle_collapse(self):
-        self.expand() if self.settings["collapsed"] else self.collapse()
+    def show_menu(self):
+        b = self.btn_menu
+        self.menu.update_idletasks()
+        y = b.winfo_rooty() - self.menu.winfo_reqheight() if self.direction == "up" or not self.expanded \
+            else b.winfo_rooty() + b.winfo_height()
+        try:
+            self.menu.tk_popup(b.winfo_rootx() - self.menu.winfo_reqwidth() + b.winfo_width(), max(0, y))
+        finally:
+            self.menu.grab_release()
 
     def _on_escape(self):
-        if self.sugg.winfo_ismapped():
+        if self.sugg_win.winfo_ismapped():
             self._hide_suggest()
         else:
             self.collapse()
 
     def _on_root_focus_out(self, _e):
-        if not self.settings["auto_collapse"]:
+        """검색창 밖(다른 프로그램)을 누르면 결과창을 자동으로 닫음"""
+        if not self.settings["auto_hide"] or not self.expanded:
             return
         if self._collapse_job:
             self.root.after_cancel(self._collapse_job)
 
         def check():
             self._collapse_job = None
-            if self.root.focus_displayof() is None and not self.settings["collapsed"]:
+            if self._drag or self._rs:
+                return
+            if self.root.focus_displayof() is None:
+                self._hide_suggest()
                 self.collapse()
-        self._collapse_job = self.root.after(300, check)
+        self._collapse_job = self.root.after(250, check)
 
     def bring_to_front(self):
         r = self.root
         if r.state() in ("iconic", "withdrawn"):
             r.deiconify()
-        if self.settings["collapsed"]:
-            self.expand()
         r.lift()
         r.attributes("-topmost", True)
         if not self.settings["topmost"]:
@@ -413,8 +530,14 @@ class App:
         if not self.entry.get():
             self._placeholder_on = True
             self.entry.config(fg=C["dim"])
-            hk = self.settings["hotkey"]
-            self.entry.insert(0, f"단어 입력 · 드래그 후 {hk}")
+            text = self.placeholder_msg or f"단어 입력 · 드래그 후 {self.settings['hotkey']}"
+            self.entry.insert(0, text)
+
+    def _refresh_placeholder(self):
+        if self._placeholder_on:
+            self.entry.delete(0, "end")
+            self._placeholder_on = False
+            self._set_placeholder()
 
     def _clear_placeholder(self, _=None):
         if self._placeholder_on:
@@ -438,7 +561,16 @@ class App:
     def clear(self):
         self.set_entry("")
         self._hide_suggest()
+        self.collapse()
         self.focus_entry()
+
+    def _on_enter(self, _e=None):
+        sel = self.sugg.curselection() if self.sugg_win.winfo_ismapped() else ()
+        if sel:
+            self.search(self.sugg.get(sel[0]).strip())
+        else:
+            self.search(self.entry_text())
+        return "break"
 
     # 자동완성
     def _on_type(self, e):
@@ -466,17 +598,26 @@ class App:
         for w in words:
             self.sugg.insert("end", "  " + w)
         self.sugg.config(height=len(words))
-        x = self.search_frame.winfo_x()
-        y = self.search_frame.winfo_y() + self.search_frame.winfo_height()
-        self.sugg.place(x=x, y=y, width=self.search_frame.winfo_width())
-        self.sugg.lift()
+        self.sugg_win.update_idletasks()
+        h = self.sugg.winfo_reqheight()
+        x, w = self.bar.winfo_rootx() + 4, self.bar.winfo_width() - 8
+        top = self.bar.winfo_rooty()
+        # 결과창이 위로 펼쳐지는 배치면 목록도 검색 막대 위에, 아니면 아래에
+        y = top - h if (self.direction == "up" and top - h >= 0) else top + self.bar.winfo_height()
+        self.sugg_win.geometry(f"{w}x{h}+{x}+{y}")
+        self.sugg_win.deiconify()
+        self.sugg_win.lift()
 
-    def _focus_suggest(self, _=None):
-        if self.sugg.winfo_ismapped():
-            self.sugg.focus_set()
-            self.sugg.selection_clear(0, "end")
-            self.sugg.selection_set(0)
-            self.sugg.activate(0)
+    def _move_suggest(self, step: int):
+        if not self.sugg_win.winfo_ismapped():
+            return "break"
+        n = self.sugg.size()
+        sel = self.sugg.curselection()
+        i = (sel[0] + step) if sel else (0 if step > 0 else n - 1)
+        i = max(0, min(n - 1, i))
+        self.sugg.selection_clear(0, "end")
+        self.sugg.selection_set(i)
+        self.sugg.see(i)
         return "break"
 
     def _pick_suggest(self):
@@ -485,14 +626,14 @@ class App:
             self.search(self.sugg.get(sel[0]).strip())
 
     def _hide_suggest(self):
-        self.sugg.place_forget()
+        self.sugg.selection_clear(0, "end")
+        self.sugg_win.withdraw()
 
     def _hide_suggest_later(self):
         def check():
-            f = self.root.focus_get()
-            if f not in (self.entry, self.sugg):
+            if self.root.focus_get() is not self.entry:
                 self._hide_suggest()
-        self.root.after(150, check)
+        self.root.after(200, check)
 
     # ------------------------------------------------------------------ 검색
     def search(self, raw: str, from_hotkey: bool = False):
@@ -502,11 +643,10 @@ class App:
             self.focus_entry()
             return
         self.set_entry(q)
-        if self.settings["collapsed"]:
-            self.expand()
+        self.expand()  # 결과창이 검색 막대 위로 스르륵 펼쳐짐
         if not self.dict:
             self._show_message(q, "사전 데이터를 준비하는 중이에요. 잠시 후 다시 시도해 주세요.\n"
-                                  "(처음 실행할 때 한 번 내려받아요. 아래 상태 표시줄을 확인해 주세요)")
+                                  "(처음 실행할 때 한 번 내려받아요. 결과창 아래 상태 표시줄을 확인해 주세요)")
             return
         try:
             res = self.dict.lookup(q)
@@ -606,7 +746,10 @@ class App:
         doc.line(("3. ", "num", None), ("결과 속 단어를 더블클릭하면 그 단어를 찾아요.", "ko", None))
         doc.line(("4. ", "num", None), ("‘웹사전’ 버튼은 네이버 사전 등 포털 검색 결과를 열어요.", "ko", None))
         doc.blank()
-        doc.line(("단축키  ", "sec", None), ("Esc 접기 · Ctrl+L 검색창 · Ctrl+1/2/3 탭 이동", "dim", None))
+        doc.line(("5. ", "num", None), ("✕ · Esc · 다른 곳 클릭 → 결과창이 닫히고 검색창만 남아요.", "ko", None))
+        doc.line(("6. ", "num", None), ("단어장·설정·종료는 검색창 오른쪽 ≡ 메뉴에 있어요.", "ko", None))
+        doc.blank()
+        doc.line(("단축키  ", "sec", None), ("Esc 결과창 닫기 · Ctrl+L 검색창 · Ctrl+1/2/3 탭 이동", "dim", None))
         self._render(self.tabs["meaning"], doc)
         self.lbl_word.config(text="")
         self.lbl_ipa.config(text="")
@@ -700,6 +843,11 @@ class App:
     # ------------------------------------------------------------------ 상태 표시
     def status(self, text: str, color: str | None = None):
         self.lbl_status.config(text=text, fg=color or C["dim"], cursor="arrow")
+        # 사전을 처음 받는 동안은 검색창(접힌 상태에서도 보이는 곳)에 진행 상황을 표시
+        msg = "" if self.dict else text[:46]
+        if msg != self.placeholder_msg:
+            self.placeholder_msg = msg
+            self._refresh_placeholder()
 
     def _idle_status(self):
         if self.dict:
@@ -904,7 +1052,7 @@ class App:
 
         checks = [
             ("항상 다른 창 위에 표시", "topmost"),
-            ("다른 창을 누르면 자동으로 접기", "auto_collapse"),
+            ("다른 곳을 누르면 결과창 자동으로 닫기 (검색창만 남김)", "auto_hide"),
             ("단축키 검색 후 클립보드 원래대로 되돌리기", "restore_clipboard"),
             ("사전 자동 업데이트 (주 1회)", "auto_update"),
         ]
@@ -990,7 +1138,7 @@ class App:
 
     # ------------------------------------------------------------------ 종료
     def quit(self):
-        self._save_geometry()
+        """≡ 메뉴 → 'QuickDic 종료' 에서만 호출됨"""
         self.settings.save()
         if self.hotkey:
             self.hotkey.stop()

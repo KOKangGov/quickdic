@@ -57,20 +57,22 @@ PORTALS_KO = {
 }
 
 DEFAULTS = {
-    "geometry": "",
-    "expanded_height": 560,
-    "collapsed": False,
+    "bar_x": None,          # 검색 막대 위치(화면 좌표)
+    "bar_y": None,
+    "width": 420,           # 창 너비
+    "panel_height": 520,    # 결과창 높이
     "topmost": True,
     "opacity": 100,
     "hotkey": "Alt+Q",
     "portal": "네이버 영어사전",
     "show_english": False,
     "restore_clipboard": True,
-    "auto_collapse": False,
+    "auto_hide": True,      # 다른 곳을 누르면 결과창 자동으로 닫기
     "auto_update": True,
     "last_update_check": "",
     "next_update_check": "",
     "font_size": 11,
+    "welcomed": False,
 }
 
 
@@ -93,7 +95,10 @@ class Settings:
     def __init__(self):
         self._lock = threading.Lock()
         self.data = dict(DEFAULTS)
-        self.data.update(_read_json(SETTINGS_PATH, {}))
+        saved = _read_json(SETTINGS_PATH, {})
+        for old_key in ("geometry", "expanded_height", "collapsed", "auto_collapse"):
+            saved.pop(old_key, None)
+        self.data.update(saved)
 
     def __getitem__(self, k):
         return self.data.get(k, DEFAULTS.get(k))
