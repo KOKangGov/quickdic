@@ -41,6 +41,7 @@ TAG_KO = {
     "abbreviation": "약어",
 }
 
+CITATION_RE = re.compile(r"^(c\.\s?)?\d{3,4}(s)?\s*([-–,]|$)")
 HANGUL_RE = re.compile(r"[ᄀ-ᇿ㄰-㆏가-힣]")
 STRIP_CHARS = " \t\r\n.,;:!?\"'()[]{}<>“”‘’«»…—–-*_/\\|`~@#$%^&+=0123456789"
 
@@ -302,7 +303,11 @@ class Dictionary:
             senses = [s for s in r.data.get("s", []) if s.get("g")]
             if not senses:
                 continue
-            label = POS_KO.get(r.data.get("p"), r.data.get("pt") or r.data.get("p") or "")
+            p = r.data.get("p")
+            if p in (None, "", "unknown"):
+                label = r.data.get("pt") or "한국어 뜻"  # 한국어판에 품사 표시가 없는 경우
+            else:
+                label = POS_KO.get(p, r.data.get("pt") or p)
             head = [("• " + label, "pos", None)]
             if multi_words:
                 head.append(("  " + r.word, "dim", None))
@@ -481,7 +486,7 @@ class Dictionary:
             for s in r.data.get("s", []):
                 for ex in s.get("ex", []):
                     text = ex[0]
-                    if text in seen:
+                    if text in seen or CITATION_RE.match(text):  # '1821, 저자, 책 제목…' 같은 출처 줄은 건너뜀
                         continue
                     seen.add(text)
                     count += 1

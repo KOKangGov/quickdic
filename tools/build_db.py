@@ -26,6 +26,7 @@ import os
 import sqlite3
 import sys
 import time
+import re
 import unicodedata
 import zlib
 from datetime import datetime, timezone
@@ -61,6 +62,7 @@ MAX_ETY_LEN = 2500
 
 # 영어 고유명사는 한국어 번역이 있을 때만 수록 (용량 절약)
 SKIP_EN_POS_UNLESS_KO = {"name"}
+CITATION_RE = re.compile(r"^(c\.\s?)?\d{3,4}(s)?\s*([-–,]|$)")
 SKIP_POS = {"character", "punct", "romanization"}
 
 
@@ -106,6 +108,8 @@ def sense_examples(sense: dict) -> list:
         if not text:
             continue
         if ex.get("type") == "quotation" and (out or len(text) > MAX_QUOTE_LEN):
+            continue
+        if CITATION_RE.match(text):  # 예문 대신 출처(연도, 저자…)가 들어간 경우
             continue
         tr = clip(ex.get("english") or ex.get("translation") or "", MAX_EXAMPLE_LEN)
         out.append([text, tr] if tr else [text])
