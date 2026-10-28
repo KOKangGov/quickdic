@@ -602,7 +602,7 @@ class Dictionary:
         en_rows = [r for r in rows if r.src == "en"]
         kodict_rows = [r for r in ko_rows if r.data.get("d")]
         unit_order = {"단어": 0, "": 1, "구": 2, "관용구": 3, "속담": 4}
-        kodict_rows.sort(key=lambda r: (unit_order.get(r.data.get("u", ""), 5), r.data.get("n") or 0))
+        kodict_rows = self._sort_homographs(kodict_rows, unit_order)
         wiki_rows = [r for r in ko_rows if not r.data.get("d")]
 
         res.headword = (kodict_rows or ko_rows or rows)[0].word if rows else key
@@ -697,6 +697,34 @@ class Dictionary:
             res.etymology.blank()
         self._render_etymology(rows, res)
         self._render_examples(kodict_rows + [r for r in rows if r not in kodict_rows], res)
+
+    # 전문 분야·고유명사 뜻만 있는 동형어는 뒤로
+    SPECIAL_CATS = {"역사", "불교", "가톨릭", "기독교", "종교 일반", "인명", "지명", "책명", "고유명 일반",
+                    "민속", "식물", "동물", "광업", "수산업", "임업", "한의", "수의", "북한어", "옛말", "방언"}
+
+    @classmethod
+    def _sort_homographs(cls, rows: list[Row], unit_order: dict) -> list[Row]:
+        """
+        동형어(사과¹, 사과² …)를 자주 쓰일 법한 것부터: 예문이 있고, 뜻이 많고, 전문어가 아닌 것을 앞으로.
+        같은 표제어(번호)의 품사 묶음은 붙여 둔다.
+        """
+        groups: dict[tuple, list[Row]] = {}
+        for r in rows:
+            groups.setdefault((r.word, r.data.get("n") or 0), []).append(r)
+
+        def score(item):
+            (word, n), rs = item
+            senses = [s for r in rs for s in r.data.get("s", [])]
+            has_ex = any(s.get("ex") for s in senses)
+            general = sum(1 for s in senses if not (set(s.get("t") or []) & cls.SPECIAL_CATS))
+            redirect = all(s.get("g", "").startswith("→") for s in senses)
+            unit = min(unit_order.get(r.data.get("u", ""), 5) for r in rs)
+            return (unit, redirect, -(has_ex * 3 + min(general, 6) + 0.2 * min(len(senses), 10)), n)
+
+        out = []
+        for _, rs in sorted(groups.items(), key=score):
+            out.extend(rs)
+        return out
 
     def _render_rel(self, doc: Doc, rows: list[Row]):
         syn, ant = [], []

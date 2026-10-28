@@ -192,7 +192,7 @@ def _sense(sense: dict) -> dict | None:
         tags.append(SENSE_TYPE_TAG[typ])
     for c in _as_list(sense.get("cat_info")):
         cat = clean_text((c or {}).get("cat"), 20)
-        if cat and cat not in tags:
+        if cat and cat not in ("없음", "일반") and cat not in tags:
             tags.append(cat)
     if tags:
         item["t"] = tags[:3]
@@ -204,23 +204,32 @@ def _sense(sense: dict) -> dict | None:
 
 def _word_meta(wi: dict) -> dict:
     hanja, orig = [], []
+    last = None
     for o in _as_list(wi.get("original_language_info")):
         o = o or {}
         lang = o.get("language_type") or ""
         text = clean_text(o.get("original_language"), 60)
+        if lang.startswith("/"):  # '沙果 / 砂果' 처럼 둘 이상 병기할 때의 구분자
+            if last is not None and last and last[-1] != "/":
+                last.append("/")
+            continue
         if not text:
             continue
         if lang == "한자":
             hanja.append(text)
+            last = hanja
         elif lang not in ("고유어",):
-            orig.append(f"{text}({lang})" if lang else text)
+            orig.append(f"{text}({lang})" if lang and lang not in ("안 밝힘", "미상") else text)
+            last = orig
+    hanja = [h for i, h in enumerate(hanja) if not (h == "/" and (i == len(hanja) - 1))]
+    orig = [o for o in orig if o != "/"]
     pron = []
     for p in _as_list(wi.get("pronunciation_info")):
         t = clean_text((p or {}).get("pronunciation"), 40)
         if t and t not in pron:
             pron.append(t)
     return {
-        "hj": "".join(hanja),
+        "hj": "".join(hanja).replace("/", " / "),
         "or": ", ".join(orig[:3]),
         "pr": " / ".join(pron[:3]),
         "u": wi.get("word_unit") or "",
@@ -321,8 +330,10 @@ class KoDictCollector:
     def rows(self):
         """(표제어, 검색키, data) — data 는 앱의 국어 뜻풀이 형식 (src='ko')"""
         for e in self.entries.values():
+            m = e["meta"]
+            if m["pr"] == e["word"]:  # 표기와 같은 발음은 굳이 보여 주지 않음
+                m["pr"] = ""
             for pos, senses in e["groups"]:
-                m = e["meta"]
                 data = {
                     "p": pos,
                     "pt": pos or m["u"] or "",
