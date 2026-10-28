@@ -1,18 +1,22 @@
 {
-  "version": "2026.10.26",
+  "version": "2026.10.28",
   "schema": 2,
-  "built_at": "2026-10-26T08:12:44+00:00",
+  "built_at": "2026-10-28T10:19:58+00:00",
   "file": "quickdic.db.gz",
-  "gz_size": 145098925,
-  "gz_sha256": "9d8e0bab28f93eed592c40cdd51f3076926db5bab3bf7dfd5faf2cceab560b6b",
-  "db_size": 221388800,
-  "en_source": "Wed, 21 Oct 2026 11:23:03 GMT",
-  "ko_source": "Wed, 21 Oct 2026 11:25:38 GMT",
+  "gz_size": 222922416,
+  "gz_sha256": "fcda133062e0b168cc7010f70b2e008d28fcb35f5f1c25b33480499820e5324c",
+  "db_size": 329695232,
+  "en_source": "Sun, 25 Oct 2026 08:19:16 GMT",
+  "ko_source": "Sun, 25 Oct 2026 08:21:52 GMT",
+  "kodict_source": "2026-10-28",
   "counts": {
-    "ko_ko": 72307,
+    "kodict_rows": 439566,
+    "kodict_std": 436587,
+    "kodict_open": 0,
     "ko_en": 16658,
     "en_en": 1300074,
     "ko_en_pairs": 44135,
-    "en_ko": 53573
+    "en_ko": 53573,
+    "freq": 348328
   }
 }
