@@ -9,7 +9,10 @@ QuickDic 앱이 쓰는 SQLite 사전 파일(quickdic.db)로 변환합니다.
   --en  영어판 위키낱말사전 raw 데이터 (raw-wiktextract-data.jsonl.gz)
         → 영어 단어의 영영 뜻·어원·예문·발음·한국어 번역, 한국어 단어의 영어 뜻
   --ko  한국어판 위키낱말사전 데이터 (ko-extract.jsonl.gz)
-        → 영어 단어의 한국어 뜻풀이, 한국어 단어의 국어 뜻풀이
+        → 영어 단어의 한국어 뜻풀이 (+ 국내 사전이 없을 때만 한국어 단어의 국어 뜻풀이)
+  --kodict  국립국어원 표준국어대사전 / 우리말샘 '사전 내려받기' JSON 묶음(zip) — 선택
+        → 한국어 단어의 국어 뜻풀이 (있으면 한국어판 위키낱말사전의 국어 뜻풀이 대신 사용)
+  (wordfreq 패키지가 설치돼 있으면 단어 빈도표도 넣어 오타 추천 순위에 사용)
 
 출력
   --out quickdic.db
@@ -30,6 +33,9 @@ import re
 import unicodedata
 import zlib
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kodict  # noqa: E402
 
 try:  # 훨씬 빠른 JSON 파서 (CI 에서는 설치됨)
     import orjson
@@ -319,8 +325,8 @@ class Batch:
 
 # ---------------------------------------------------------------- 단계별 처리
 
-def process_ko_edition(path: str, entries: "EntryWriter", stats: dict):
-    """한국어판: 영어 단어의 한국어 뜻풀이 + 한국어 단어의 국어 뜻풀이."""
+def process_ko_edition(path: str, entries: "EntryWriter", stats: dict, skip_ko: bool = False):
+    """한국어판: 영어 단어의 한국어 뜻풀이 + (skip_ko 가 아니면) 한국어 단어의 국어 뜻풀이."""
     t0 = time.time()
     with open_text(path) as fh:
         for n, line in enumerate(fh, 1):
@@ -331,7 +337,7 @@ def process_ko_edition(path: str, entries: "EntryWriter", stats: dict):
             except Exception:
                 continue
             lang = e.get("lang_code")
-            if lang not in ("en", "ko"):
+            if lang not in ("en", "ko") or (skip_ko and lang == "ko"):
                 continue
             word = (e.get("word") or "").strip()
             pos = e.get("pos") or ""
@@ -427,6 +433,46 @@ def process_en_edition(path: str, entries: "EntryWriter", rev: "Batch", stats: d
     rev.flush()
 
 
+def process_kodict(paths: list[str], entries: "EntryWriter", stats: dict) -> bool:
+    """국립국어원 사전 → 국어 뜻풀이 (src='ko' 로 넣어 예전 앱에서도 보이게)."""
+    col = kodict.KoDictCollector()
+    col.load(paths)
+    n = 0
+    for word, key, data in col.rows():
+        if not word or len(word) > MAX_WORD_LEN:
+            continue
+        entries.add((word, key, "ko", "ko", compact(data)))
+        n += 1
+    stats["kodict_rows"] = n
+    stats["kodict_std"] = col.stats["std"]
+    stats["kodict_open"] = col.stats["open"]
+    print(f"  국내 사전: 표준 {col.stats['std']:,} / 우리말샘 {col.stats['open']:,} 표제어 "
+          f"(우리말샘 중복 {col.stats['open_dup']:,}개 제외) → {n:,}행", flush=True)
+    return n > 0
+
+
+def add_word_freq(con: sqlite3.Connection, stats: dict):
+    """오타 추천 순위용 단어 빈도표 (zipf × 10). wordfreq 가 없으면 건너뜀."""
+    try:
+        import wordfreq
+    except ImportError:
+        print("  (wordfreq 없음 — 빈도표 생략)", flush=True)
+        return
+    import math
+    con.execute("CREATE TABLE freq(key TEXT PRIMARY KEY, z INTEGER NOT NULL) WITHOUT ROWID")
+    rows = {}
+    for lang in ("en", "ko"):
+        for w, f in wordfreq.get_frequency_dict(lang, "best").items():
+            k = norm_key(w)
+            if not k or len(k) > 40 or f <= 0:
+                continue
+            z = int(round((math.log10(f) + 9) * 10))
+            if z > rows.get(k, 0):
+                rows[k] = z
+    con.executemany("INSERT INTO freq VALUES(?,?)", rows.items())
+    stats["freq"] = len(rows)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="QuickDic 사전 DB 빌더")
     ap.add_argument("--en", required=True, help="영어판 raw-wiktextract-data.jsonl(.gz)")
@@ -435,6 +481,8 @@ def main(argv=None):
     ap.add_argument("--version", default=datetime.now(timezone.utc).strftime("%Y.%m.%d"))
     ap.add_argument("--en-date", default="", help="영어판 원본 날짜(표시용)")
     ap.add_argument("--ko-date", default="", help="한국어판 원본 날짜(표시용)")
+    ap.add_argument("--kodict", nargs="*", default=[], help="국립국어원 사전 JSON zip/폴더 (선택)")
+    ap.add_argument("--kodict-date", default="", help="국내 사전 내려받은 날짜(표시용)")
     ap.add_argument("--limit", type=int, default=0, help="테스트용: 영어판 처리 줄 수 제한")
     args = ap.parse_args(argv)
 
@@ -445,10 +493,19 @@ def main(argv=None):
     rev = Batch(con, "INSERT INTO ko_en(ko,en,sense) VALUES(?,?,?)")
     stats: dict = {}
 
-    print("1/2 한국어판 처리 중...", flush=True)
-    process_ko_edition(args.ko, entries, stats)
-    print("2/2 영어판 처리 중... (가장 오래 걸립니다)", flush=True)
+    kodict_paths = [p for p in args.kodict if p and os.path.exists(p)]
+    has_kodict = False
+    if kodict_paths:
+        print("0/3 국내 사전(국립국어원) 처리 중...", flush=True)
+        has_kodict = process_kodict(kodict_paths, entries, stats)
+    if not has_kodict:
+        print("  국내 사전 파일이 없어 한국어판 위키낱말사전의 국어 뜻풀이를 씁니다.", flush=True)
+    print("1/3 한국어판 위키낱말사전 처리 중...", flush=True)
+    process_ko_edition(args.ko, entries, stats, skip_ko=has_kodict)
+    print("2/3 영어판 처리 중... (가장 오래 걸립니다)", flush=True)
     process_en_edition(args.en, entries, rev, stats, args.limit)
+    print("3/3 단어 빈도표 만드는 중...", flush=True)
+    add_word_freq(con, stats)
 
     meta = {
         "schema": SCHEMA_VERSION,
@@ -456,7 +513,9 @@ def main(argv=None):
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "en_source": args.en_date,
         "ko_source": args.ko_date,
-        "license": "Wiktionary (CC BY-SA 4.0 / GFDL) via kaikki.org",
+        "kodict_source": args.kodict_date if has_kodict else "",
+        "license": "Wiktionary (CC BY-SA 4.0 / GFDL) via kaikki.org"
+                   + ("; 국립국어원 표준국어대사전/우리말샘 (CC BY-SA 2.0 KR)" if has_kodict else ""),
         **{f"count_{k}": v for k, v in stats.items()},
     }
     finish_db(con, meta)

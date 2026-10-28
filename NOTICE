@@ -11,5 +11,15 @@ QuickDic 이 내려받아 사용하는 사전 파일(quickdic.db)은 Wiktionary(
 - 추출 데이터: kaikki.org (Tatu Ylonen, "Wiktextract: Wiktionary as Machine-Readable Structured Data", LREC 2022)
   https://kaikki.org/
 
-가공된 사전 파일 역시 같은 조건(CC BY-SA 4.0)으로 배포됩니다.
+국어 뜻풀이(한국어 표제어)는 국립국어원의 「표준국어대사전」 및 「우리말샘」 데이터를 가공한 것입니다.
+- 원저작자: 국립국어원 (https://stdict.korean.go.kr , https://opendict.korean.go.kr)
+- 라이선스: 크리에이티브 커먼즈 저작자표시-동일조건변경허락 2.0 대한민국 (CC BY-SA 2.0 KR)
+  https://creativecommons.org/licenses/by-sa/2.0/kr/
+- 출판물·신문 등에서 인용한 예문과 발음·이미지 등 미디어 파일은 이 라이선스 대상이 아니므로 포함하지 않습니다.
+- 표제어 구분(동형어 번호)·띄어쓰기 표시 등은 화면 표시에 맞게 바꾸었습니다.
+
+오타 추천 순위에 쓰는 단어 빈도표는 wordfreq (Robyn Speer, https://github.com/rspeer/wordfreq) 의
+데이터를 사용합니다. 라이선스: CC BY-SA 4.0.
+
+가공된 사전 파일 역시 같은 조건(CC BY-SA)으로 배포됩니다.
 The derived dictionary file is distributed under the same license (CC BY-SA 4.0).

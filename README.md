@@ -3,9 +3,11 @@
 화면 위에 작은 사전 창을 띄워 두고, 다른 프로그램에서 **단어를 드래그한 뒤 `Alt + Q`** 를 누르면
 바로 뜻·어원·예문을 보여 주는 Windows 사전입니다.
 
-- 오프라인 사전: 위키낱말사전(Wiktionary) 영어판·한국어판 데이터를 SQLite 로 변환해 PC 에 저장
+- 오프라인 사전: 위키낱말사전(Wiktionary) 영어판·한국어판 + **국립국어원 표준국어대사전(국어 뜻풀이)** 을 SQLite 로 변환해 PC 에 저장
 - 뜻 / 어원 / 예문 탭, 영영 정의 토글, 유의어·반의어
-- 한글을 넣으면 한영(영어 대응어 + 국어 뜻풀이)으로 자동 전환
+- 한글을 넣으면 한영으로 자동 전환 — **국어 뜻풀이가 맨 위**, 그 아래 영어 대응어
+- **오타 추천**: 입력하든 붙여넣든 사전에 없으면 비슷한 단어를 추천 (`recieve → receive`, `사괴 → 사과`, `아릅답다 → 아름답다`)
+  - 한/영 키를 잘못 두고 친 것도 바로잡음 (`tkrhk → 사과`, `ㅗ디ㅣㅐ → hello`)
 - **웹사전** 버튼 → 네이버·다음·Cambridge·Oxford·Merriam-Webster 검색 결과 바로 열기
 - 발음 듣기(Windows 내장 음성, 오프라인), 단어장(★ + CSV 내보내기), 최근 검색 10개
 - 항상 위 고정, 투명도 50~100%, 접기/펼치기, 창 위치·크기 기억, Windows 시작 시 자동 실행
@@ -20,6 +22,7 @@
 ```
  [GitHub Actions: 매주 월요일 새벽]                     [사용자 PC]
   kaikki.org 위키낱말 데이터 내려받기                     QuickDic.exe 실행
+  + 'source-data' 브랜치의 국립국어원 사전 정리본 zip
         ↓ tools/build_db.py                              ↓ 7일마다 version.json 확인
   quickdic.db 만들기 → 압축                                ↓ 새 버전이면 백그라운드로 받아 교체
         ↓                                                 오프라인 검색 (0.1초 이내)
@@ -41,6 +44,25 @@
 5. 다른 사람에게는 릴리스 주소만 알려 주면 됩니다:
    `https://github.com/<내아이디>/<저장소이름>/releases/latest`
 
+## 국내 사전(국어 뜻풀이) 원본 올리기
+
+국립국어원 사전은 로그인해야 받을 수 있어서 자동으로 내려받지 못합니다. 저장소 주인이 한 번 받아서 정리본을 올려 두면
+매주 사전 빌드 때 그 파일을 씁니다. (올려 두지 않으면 예전처럼 한국어판 위키낱말사전의 국어 뜻풀이를 씁니다)
+
+1. [표준국어대사전](https://stdict.korean.go.kr) 에 회원 가입·로그인 → **사전 내려받기** 메뉴에서 **JSON** 형식 zip 을 받습니다.
+   - 표제어가 더 많은 [우리말샘](https://opendict.korean.go.kr) 의 JSON zip 도 됩니다 (용량은 2~3배). 둘 다 올리면 겹치는 뜻풀이는 한 번만 넣습니다.
+2. **받은 zip 을 그대로 올리지 말고 정리본을 만듭니다.** 원본에는 재배포가 안 되는 인용 예문·미디어 링크가 들어 있어서,
+   QuickDic 이 쓰는 항목만 남긴 정리본(약 35MB)을 올려야 합니다.
+   ```
+   python tools/clean_kodict.py "전체 내려받기_표준국어대사전_JSON_날짜.zip" stdict-clean.zip
+   ```
+3. 저장소의 `source-data` 브랜치에 있는 `stdict-clean.zip` 을 새 정리본으로 바꿔 올립니다
+   (GitHub 화면: 브랜치를 `source-data` 로 바꾸고 → **Add file → Upload files** → 같은 이름으로 올리기)
+4. **Actions** → **사전 데이터 만들기 (주 1회)** → **Run workflow** 로 바로 다시 만들 수 있습니다.
+
+사전 내용이 바뀌는 것은 몇 달에 한 번이라, 가끔(예: 분기마다) 새 zip 으로 바꿔 올리면 충분합니다.
+출판물·신문에서 인용한 예문(출처가 달린 예문)은 저작권 때문에 자동으로 빼고 넣습니다.
+
 ## 새 버전 내기
 
 코드를 고친 뒤 **앱 만들기** 를 다시 실행하면서 버전을 올려 주세요(예: `1.0.1`).
@@ -52,10 +74,13 @@
 | --- | --- |
 | `app/quickdic.py` | 플로팅 창 화면 (tkinter) |
 | `app/dictdb.py` | 사전 검색·결과 정리 |
+| `app/fuzzy.py` | 오타 추천: 편집 거리, 한글 자모 비교, 한/영 자판 바꾸기 |
 | `app/winsys.py` | Windows 연동: 전역 단축키, 선택 글자 복사, 발음, 자동 실행 |
 | `app/updater.py` | 사전 자동 업데이트 |
 | `app/config.py` | 설정·단어장·검색 기록 저장 |
 | `tools/build_db.py` | 위키낱말 데이터 → SQLite 사전 변환 |
+| `tools/kodict.py` | 국립국어원 표준국어대사전·우리말샘 JSON 읽기 |
+| `tools/clean_kodict.py` | 국립국어원 원본 zip → 공개해도 되는 정리본 zip (인용 예문·미디어 제거) |
 | `tools/package_db.py` | 사전 압축 + `version.json` 생성 |
 | `.github/workflows/` | 주간 사전 빌드, exe 빌드 |
 
@@ -90,4 +115,6 @@ PRD 는 Flutter 를 제안했지만, Windows 우선 배포를 빠르게 하기 �
 ## 라이선스
 
 - 코드: MIT ([LICENSE](LICENSE))
-- 사전 데이터: [Wiktionary](https://www.wiktionary.org/) 기여자들, CC BY-SA 4.0 / GFDL — [kaikki.org](https://kaikki.org/) 의 Wiktextract 추출본 사용 ([NOTICE](NOTICE))
+- 사전 데이터: [Wiktionary](https://www.wiktionary.org/) 기여자들, CC BY-SA 4.0 / GFDL — [kaikki.org](https://kaikki.org/) 의 Wiktextract 추출본 사용
+- 국어 뜻풀이: 국립국어원 표준국어대사전·우리말샘, CC BY-SA 2.0 KR
+- 오타 추천 순위용 단어 빈도: [wordfreq](https://github.com/rspeer/wordfreq) (CC BY-SA 4.0) — 자세한 내용은 [NOTICE](NOTICE)
