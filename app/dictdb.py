@@ -754,7 +754,10 @@ class Dictionary:
             if not ety or ety in seen:
                 continue
             seen.add(ety)
-            src = "영어판 위키낱말사전" if r.src == "en" else "한국어판 위키낱말사전"
+            if r.data.get("d"):
+                src = "표준국어대사전" if r.data["d"] == "표준" else r.data["d"]
+            else:
+                src = "영어판 위키낱말사전" if r.src == "en" else "한국어판 위키낱말사전"
             doc.line((r.word, "pos", None), (f"   {src}", "dim", None))
             doc.line((ety, "en" if r.src == "en" else "ko", None))
             doc.blank()

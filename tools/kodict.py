@@ -24,6 +24,7 @@ import io
 import json
 import os
 import re
+import urllib.parse
 import zipfile
 from collections import OrderedDict
 
@@ -34,6 +35,7 @@ MAX_EX_LEN = 240
 MAX_REL = 12
 
 TAG_RE = re.compile(r"<[^>]+>")
+LATEX_IMG_RE = re.compile(r"<img[^>]*latex=([^'\"&>]+)[^>]*>")
 HOMO_RE = re.compile(r"\d+$")
 HANGUL = re.compile(r"[가-힣]")
 
@@ -45,6 +47,8 @@ def clean_text(s, n: int = MAX_GLOSS) -> str:
     if not s:
         return ""
     s = html.unescape(str(s))
+    # 수식 그림(<img src='...formula.do?latex=...'>)은 수식 글자로 바꿔 둔다
+    s = LATEX_IMG_RE.sub(lambda m: urllib.parse.unquote(m.group(1)), s)
     s = TAG_RE.sub("", s)
     s = s.replace("{", "").replace("}", "")
     s = " ".join(s.split())
@@ -233,6 +237,7 @@ def _word_meta(wi: dict) -> dict:
         "or": ", ".join(orig[:3]),
         "pr": " / ".join(pron[:3]),
         "u": wi.get("word_unit") or "",
+        "ety": clean_text(wi.get("origin"), 1500),
     }
 
 
@@ -346,5 +351,6 @@ class KoDictCollector:
                     "syn": e["syn"],
                     "ant": e["ant"],
                     "d": e["d"],
+                    "ety": m.get("ety", ""),
                 }
                 yield e["word"], search_key(e["word"]), data

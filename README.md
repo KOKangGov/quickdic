@@ -51,9 +51,13 @@
 
 1. [표준국어대사전](https://stdict.korean.go.kr) 에 회원 가입·로그인 → **사전 내려받기** 메뉴에서 **JSON** 형식 zip 을 받습니다.
    - 표제어가 더 많은 [우리말샘](https://opendict.korean.go.kr) 의 JSON zip 도 됩니다 (용량은 2~3배). 둘 다 올리면 겹치는 뜻풀이는 한 번만 넣습니다.
-2. 저장소 → **Releases** → `source-data` 릴리스(없으면 **Draft a new release** → 태그 `source-data` 로 새로 만들기, *Set as a pre-release* 체크)
-   → 받은 zip 파일을 끌어다 놓고 저장
-3. **Actions** → **사전 데이터 만들기 (주 1회)** → **Run workflow** 로 바로 다시 만들 수 있습니다.
+2. **받은 zip 을 그대로 올리지 말고 정리본을 만듭니다.** 원본에는 재배포가 안 되는 인용 예문·미디어 링크가 들어 있어서,
+   QuickDic 이 쓰는 항목만 남긴 정리본(약 35MB)을 올려야 합니다.
+   ```
+   python tools/clean_kodict.py "전체 내려받기_표준국어대사전_JSON_날짜.zip" stdict-clean.zip
+   ```
+3. 저장소 → **Releases** → `source-data` 릴리스 → **Edit** → 예전 zip 은 지우고 `stdict-clean.zip` 을 끌어다 놓고 저장
+4. **Actions** → **사전 데이터 만들기 (주 1회)** → **Run workflow** 로 바로 다시 만들 수 있습니다.
 
 사전 내용이 바뀌는 것은 몇 달에 한 번이라, 가끔(예: 분기마다) 새 zip 으로 바꿔 올리면 충분합니다.
 출판물·신문에서 인용한 예문(출처가 달린 예문)은 저작권 때문에 자동으로 빼고 넣습니다.
@@ -75,6 +79,7 @@
 | `app/config.py` | 설정·단어장·검색 기록 저장 |
 | `tools/build_db.py` | 위키낱말 데이터 → SQLite 사전 변환 |
 | `tools/kodict.py` | 국립국어원 표준국어대사전·우리말샘 JSON 읽기 |
+| `tools/clean_kodict.py` | 국립국어원 원본 zip → 공개해도 되는 정리본 zip (인용 예문·미디어 제거) |
 | `tools/package_db.py` | 사전 압축 + `version.json` 생성 |
 | `.github/workflows/` | 주간 사전 빌드, exe 빌드 |
 
