@@ -33,6 +33,7 @@ def main(db_path: str = "quickdic.db"):
         "db_size": os.path.getsize(db_path),
         "en_source": meta.get("en_source", ""),
         "ko_source": meta.get("ko_source", ""),
+        "kodict_source": meta.get("kodict_source", ""),
         "counts": {k[6:]: int(v) for k, v in meta.items() if k.startswith("count_")},
     }
     with open("version.json", "w", encoding="utf-8") as f:

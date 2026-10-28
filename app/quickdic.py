@@ -3,7 +3,7 @@ QuickDic — 작은 플로팅 사전
 
   · 화면 위에 작은 사전 창을 띄워 두고
   · 다른 프로그램에서 단어를 드래그한 뒤 Alt+Q 를 누르면 바로 찾아 줍니다.
-  · 위키낱말사전(Wiktionary) 기반 오프라인 사전, 주 1회 자동 업데이트.
+  · 위키낱말사전(Wiktionary) + 국립국어원 표준국어대사전 기반 오프라인 사전, 주 1회 자동 업데이트.
 """
 
 from __future__ import annotations
@@ -567,7 +567,7 @@ class App:
     def _on_enter(self, _e=None):
         sel = self.sugg.curselection() if self.sugg_win.winfo_ismapped() else ()
         if sel:
-            self.search(self.sugg.get(sel[0]).strip())
+            self.search(self._sugg_word(sel[0]))
         else:
             self.search(self.entry_text())
         return "break"
@@ -591,6 +591,13 @@ class App:
         except Exception:
             words = []
         words = [w for w in words if w.lower() != text.lower()][:7]
+        # 앞부분이 맞는 단어가 거의 없으면 오타로 보고 비슷한 단어를 추천 ('≈' 표시)
+        if len(words) < 3 and not self.dict.exists(text):
+            try:
+                fz = self.dict.similar(text, limit=7 - len(words), fast=True)
+            except Exception:
+                fz = []
+            words += [self.FUZZY_MARK + w for w in fz if w not in words]
         if not words:
             self._hide_suggest()
             return
@@ -620,10 +627,15 @@ class App:
         self.sugg.see(i)
         return "break"
 
+    FUZZY_MARK = "≈ "
+
+    def _sugg_word(self, i: int) -> str:
+        return self.sugg.get(i).strip().removeprefix(self.FUZZY_MARK.strip()).strip()
+
     def _pick_suggest(self):
         sel = self.sugg.curselection()
         if sel:
-            self.search(self.sugg.get(sel[0]).strip())
+            self.search(self._sugg_word(sel[0]))
 
     def _hide_suggest(self):
         self.sugg.selection_clear(0, "end")
@@ -670,12 +682,9 @@ class App:
             doc.line((f"‘{res.query}’ 은(는) 오프라인 사전에 없어요.", "h1", None))
             doc.blank()
             if res.suggestions:
-                segs = [("혹시 이 단어인가요?  ", "sec", None)]
-                for i, w in enumerate(res.suggestions[:8]):
-                    if i:
-                        segs.append(("  ", None, None))
-                    segs.append((w, "link", w))
-                doc.line(*segs)
+                doc.line(("혹시 이 단어를 찾으셨나요?", "sec", None))
+                for w in res.suggestions[:8]:
+                    doc.line(("  · ", "dim", None), (w, "link", w))
                 doc.blank()
             doc.line(("→ 포털 사전에서 찾아보기", "link", "@web"))
             self._render(self.tabs["meaning"], doc)
@@ -1088,7 +1097,8 @@ class App:
         row += 1
 
         about = tk.Label(win, text=f"QuickDic {config.APP_VERSION}  ·  사전 데이터: Wiktionary (CC BY-SA 4.0), "
-                                   "kaikki.org", bg=C["bg"], fg=C["accent"], font=self.f["small"], cursor="hand2")
+                                   "kaikki.org · 국립국어원 (CC BY-SA 2.0 KR)",
+                         bg=C["bg"], fg=C["accent"], font=self.f["small"], cursor="hand2")
         about.grid(row=row, column=0, columnspan=2, padx=12, pady=(8, 2), sticky="w")
         about.bind("<Button-1>", lambda e: winsys.open_url("https://kaikki.org/"))
         row += 1

@@ -14,6 +14,8 @@ import unicodedata
 import zlib
 from dataclasses import dataclass, field
 
+import fuzzy
+
 # ------------------------------------------------------------------ 표시용 사전
 
 POS_KO = {
@@ -43,6 +45,7 @@ TAG_KO = {
 
 CITATION_RE = re.compile(r"^(c\.\s?)?\d{3,4}(s)?\s*([-–,]|$)")
 HANGUL_RE = re.compile(r"[ᄀ-ᇿ㄰-㆏가-힣]")
+JAMO_RE = re.compile(r"[ㄱ-ㅣ]")
 STRIP_CHARS = " \t\r\n.,;:!?\"'()[]{}<>“”‘’«»…—–-*_/\\|`~@#$%^&+=0123456789"
 
 
@@ -66,6 +69,14 @@ def clean_query(text: str) -> str:
 
 def is_korean(text: str) -> bool:
     return bool(HANGUL_RE.search(text or ""))
+
+
+def ko_key(word: str) -> str:
+    """국어 표제어 검색 키 (띄어쓰기 무시) — tools/kodict.search_key 와 같은 규칙"""
+    return "".join(norm_key(word).split()).strip("-")
+
+
+SUP_DIGITS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 
 def english_variants(word: str) -> list[str]:
@@ -143,7 +154,7 @@ class Result:
     meaning_en: Doc = field(default_factory=Doc)  # 영영 정의 (토글)
     etymology: Doc = field(default_factory=Doc)
     examples: Doc = field(default_factory=Doc)
-    suggestions: list = field(default_factory=list)
+    suggestions: list = field(default_factory=list)  # 못 찾았을 때 '혹시 이 단어?'
     redirected_from: str = ""
     has_ko: bool = False       # 한국어 뜻(뜻풀이/번역어)이 있는지
 
@@ -170,6 +181,8 @@ class Dictionary:
             self.zdict = bytes(row[0]) if row else b""
         except sqlite3.Error:
             pass
+        self.has_freq = self.con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='freq'").fetchone() is not None
 
     def _unpack(self, data: bytes) -> dict:
         if self.zdict:
@@ -209,6 +222,109 @@ class Dictionary:
         )
         return [r[0] for r in cur]
 
+    # ---------------------------------------------------------- 오타 → 비슷한 단어
+    def _existing(self, keys, lang: str) -> list[str]:
+        keys = list(keys)
+        found = []
+        for i in range(0, len(keys), 400):
+            chunk = keys[i:i + 400]
+            q = ",".join("?" * len(chunk))
+            found += [r[0] for r in self.con.execute(
+                f"SELECT DISTINCT key FROM entries WHERE lang=? AND key IN ({q})", (lang, *chunk))]
+        return found
+
+    def _freq(self, keys) -> dict:
+        if not self.has_freq or not keys:
+            return {}
+        keys = list(keys)
+        out = {}
+        for i in range(0, len(keys), 400):
+            chunk = keys[i:i + 400]
+            q = ",".join("?" * len(chunk))
+            out.update(self.con.execute(f"SELECT key, z FROM freq WHERE key IN ({q})", chunk).fetchall())
+        return out
+
+    def _display(self, key: str, lang: str) -> str:
+        rows = self.con.execute("SELECT word FROM entries WHERE key=? AND lang=? ORDER BY id LIMIT 8",
+                                (key, lang)).fetchall()
+        words = [r[0] for r in rows]
+        if not words:
+            return key
+        # 소문자 표기(일반 단어)를 고유명사 표기보다 우선
+        return next((w for w in words if w == key or w.lower() == w), words[0])
+
+    def similar(self, text: str, limit: int = 8, fast: bool = False) -> list[str]:
+        """
+        오타로 보이는 검색어와 비슷한 사전 단어. 가까운 순 → 자주 쓰는 순.
+        fast=True 이면 타이핑 중 자동완성용으로 가볍게만 찾는다.
+        """
+        q = clean_query(text)
+        if not q:
+            return []
+        scored: dict[tuple, float] = {}  # (lang, key) → 점수(낮을수록 좋음)
+
+        def add(lang, keys, dist_fn, base=0.0):
+            freq = self._freq(keys)
+            for k in keys:
+                d = dist_fn(k)
+                if d > 2:
+                    continue
+                sc = base + d - freq.get(k, 0) * 0.012
+                if sc < scored.get((lang, k), 99):
+                    scored[(lang, k)] = sc
+
+        if is_korean(q):
+            key = ko_key(q)
+            # 1) 자모 하나 차이 후보를 직접 만들어 사전에 있는지 확인 (빠름)
+            cands = fuzzy.edits1_ko(key)
+            if not fast or len(key) <= 6:
+                add("ko", self._existing(cands, "ko"), lambda k: fuzzy.ko_distance(key, k, 2))
+            # 2) 첫 글자가 같은 단어들 중에서 자모 거리 2 이내
+            if not fast and len(key) >= 2:
+                first = key[0]
+                rows = self.con.execute(
+                    "SELECT DISTINCT key FROM entries WHERE lang='ko' AND key >= ? AND key < ? "
+                    "AND length(key) BETWEEN ? AND ? LIMIT 6000",
+                    (first, chr(ord(first) + 1), max(1, len(key) - 1), len(key) + 1)).fetchall()
+                add("ko", [r[0] for r in rows if r[0] != key], lambda k: fuzzy.ko_distance(key, k, 2))
+            # 3) 한글 자판으로 영어를 친 경우 ('ㅁㅔㅔㅣㄷ' → apple) — 낱자모가 있거나 한글 후보가 없을 때만
+            eng = fuzzy.kor_to_keys(q).lower()
+            if ((JAMO_RE.search(q) or not scored) and eng.isascii() and eng.replace(" ", "").isalpha()
+                    and (not fast or len(eng) >= 4)):
+                for cand in english_variants(eng)[:1]:
+                    if self._existing([norm_key(cand)], "en"):
+                        scored[("en", norm_key(cand))] = -5
+        else:
+            key = norm_key(q)
+            # 0) 영문 자판으로 한글을 친 경우 ('tkrhk' → 사과)
+            kor = fuzzy.keys_to_kor(q)
+            if kor and fuzzy.is_syllable(kor[0]) and all(fuzzy.is_syllable(c) or c == " " for c in kor):
+                kk = ko_key(kor)
+                if self._existing([kk], "ko"):
+                    scored[("ko", kk)] = -5
+            if len(key) >= 2:
+                # 1) 한 글자 차이(빠짐·더함·바꿈·순서 바뀜)
+                add("en", self._existing(fuzzy.edits1_en(key), "en"), lambda k: fuzzy.osa_distance(key, k, 2))
+                # 2) 앞 두세 글자가 같은 단어들 중 거리 2 이내
+                if not fast and len(key) >= 4:
+                    pre = key[:3] if len(key) >= 6 else key[:2]
+                    rows = self.con.execute(
+                        "SELECT DISTINCT key FROM entries WHERE lang='en' AND key >= ? AND key < ? "
+                        "AND length(key) BETWEEN ? AND ? LIMIT 6000",
+                        (pre, pre + "\uffff", len(key) - 2, len(key) + 2)).fetchall()
+                    add("en", [r[0] for r in rows if r[0] != key], lambda k: fuzzy.osa_distance(key, k, 2))
+        best = sorted(scored.items(), key=lambda kv: (kv[1], kv[0][1]))
+        out = []
+        for (lang, k), _ in best:
+            if k == norm_key(q) or k == ko_key(q):
+                continue
+            w = self._display(k, lang)
+            if w not in out:
+                out.append(w)
+            if len(out) >= limit:
+                break
+        return out
+
     def exists(self, word: str) -> bool:
         key = norm_key(word)
         lang = "ko" if is_korean(key) else "en"
@@ -222,15 +338,49 @@ class Dictionary:
         res = Result(query=q)
         if not q:
             return res
+        # 한글 자판 상태로 영어를 친 경우 ('ㅗ디ㅣㅐ' → hello): 낱자모가 섞여 있으면 먼저 영어로 바꿔 본다
+        if JAMO_RE.search(q):
+            eng = fuzzy.kor_to_keys(q).lower()
+            if eng.isascii() and self._existing([norm_key(eng)], "en"):
+                res.lang = "en"
+                self._lookup_en(eng, res)
+                if res.found:
+                    res.redirected_from = q
+                    return res
+                res = Result(query=q)
         if is_korean(q):
             res.lang = "ko"
             self._lookup_ko(q, res)
         else:
             res.lang = "en"
             self._lookup_en(q, res)
-        if not res.found:
-            res.suggestions = self.suggestions(q[: max(3, len(q) - 2)], res.lang)
+            # 영문 자판 상태로 한글을 친 경우 ('dkssud' → 안녕)
+            if not res.found:
+                kor = fuzzy.keys_to_kor(q)
+                if kor and all(fuzzy.is_syllable(c) or c == " " for c in kor) and self._existing([ko_key(kor)], "ko"):
+                    res = Result(query=q, lang="ko")
+                    self._lookup_ko(kor, res)
+                    if res.found:
+                        res.redirected_from = q
+                        return res
+                    res = Result(query=q, lang="en")
+        if not res.found and not res.suggestions:
+            sim = self.similar(q, limit=8)
+            pre = [w for w in self.suggestions(q[: max(3, len(q) - 2)], res.lang) if w not in sim]
+            res.suggestions = (sim + pre)[:8]
         return res
+
+    PARTICLES = {
+        "이", "가", "을", "를", "은", "는", "에", "의", "도", "만", "와", "과", "로", "으로", "에서", "에게",
+        "까지", "부터", "께", "한테", "보다", "처럼", "이다", "다", "요", "이요", "들", "랑", "이랑", "고", "며",
+        "에는", "에도", "으로는", "로는", "이나", "나", "든지", "마다", "조차", "밖에", "하다", "했다", "하고",
+        "하는", "한", "할", "해", "해서", "하여", "된", "되다", "적", "적인", "적으로", "들이", "들을", "들의",
+    }
+
+    @classmethod
+    def _looks_like_particle(cls, q: str, head: str) -> bool:
+        rest = ko_key(q)[len(ko_key(head)):]
+        return rest in cls.PARTICLES
 
     # ---------------------------------------------------------- 영어 → 한국어
     def _lookup_en(self, q: str, res: Result):
@@ -268,6 +418,25 @@ class Dictionary:
         res.has_ko = self._has_ko(rows) or bool(lemma_rows and self._has_ko(lemma_rows))
         form_only = all(s.get("fo") for r in rows for s in r.data.get("s", [])) and not self._has_ko(rows)
         show_note = not self._has_ko(rows) and not (lemma_rows and self._has_ko(lemma_rows))
+        lemma_ko = bool(lemma_rows) and self._has_ko(lemma_rows)
+        if form_only and lemma_ko:
+            # 'apples' 처럼 변화형뿐이면 원형의 한국어 뜻을 맨 위에 보여준다
+            gloss = next((s.get("g") for r in rows for s in r.data.get("s", []) if s.get("g")), "")
+            for lm in lemmas[:3]:
+                lr = [r for r in lemma_rows if norm_key(r.word) == norm_key(lm)]
+                if not lr:
+                    continue
+                for d in (res.meaning, res.meaning_en):
+                    d.line(("▶ 원형 ", "sec", None), (lm, "link", lm),
+                           (f"   ({gloss})" if gloss else "", "dim", None))
+                self._render_en_meaning(lr, res, show_note=False)
+                for d in (res.meaning, res.meaning_en):
+                    d.blank()
+            if not res.ipa:
+                res.ipa = next((r.data["ipa"][0] for r in lemma_rows if r.data.get("ipa")), "")
+            self._render_etymology(rows + lemma_rows, res)
+            self._render_examples(lemma_rows + rows, res)
+            return
         self._render_en_meaning(rows, res, show_note=show_note, compact=bool(lemma_rows) and form_only)
         if lemma_rows:
             for lm in lemmas[:3]:
@@ -389,31 +558,99 @@ class Dictionary:
         return [("(" + ", ".join(TAG_KO.get(t, t) for t in tags) + ") ", "tag", None)]
 
     # ---------------------------------------------------------- 한국어 → 영어
+    def _ko_rows(self, key: str) -> tuple[list, list]:
+        """띄어쓴 키와 붙여 쓴 키 모두로 찾는다 (국어사전 표제어는 붙여 쓴 키로 저장됨)."""
+        rows, pairs, seen = [], [], set()
+        for k in dict.fromkeys((key, ko_key(key))):
+            for r in self._rows(k, "ko"):
+                sig = (r.word, r.src, json.dumps(r.data, ensure_ascii=False, sort_keys=True)[:200])
+                if sig not in seen:
+                    seen.add(sig)
+                    rows.append(r)
+            for p in self._ko_to_en(k):
+                if p not in pairs:
+                    pairs.append(p)
+        return rows, pairs
+
     def _lookup_ko(self, q: str, res: Result):
         key = norm_key(q)
-        rows = self._rows(key, "ko")
-        pairs = self._ko_to_en(key)
+        rows, pairs = self._ko_rows(key)
         if not rows and not pairs:
             # 조사·어미가 붙은 경우 끝 글자를 하나씩 떼어 보며 재시도
-            for cut in range(1, min(3, len(key) - 1) + 1):
-                k2 = key[:-cut]
-                rows, pairs = self._rows(k2, "ko"), self._ko_to_en(k2)
-                if rows or pairs:
-                    res.redirected_from = q
-                    key = k2
-                    break
+            k0 = ko_key(key)
+            for cut in range(1, min(3, len(k0) - 1) + 1):
+                k2 = k0[:-cut]
+                r2, p2 = self._ko_rows(k2)
+                if not (r2 or p2):
+                    continue
+                if k0[len(k2):] not in self.PARTICLES:
+                    # 뗀 부분이 조사·어미가 아니면 오타일 가능성이 크다 → 비슷한 단어가 있으면 그걸 추천
+                    sim = self.similar(q, limit=8)
+                    if sim:
+                        res.suggestions = sim + ([r2[0].word] if r2 and r2[0].word not in sim else [])
+                        return
+                rows, pairs = r2, p2
+                res.redirected_from = q
+                key = k2
+                break
         if not rows and not pairs:
             return
         res.found = True
-        res.headword = rows[0].word if rows else key
         doc = res.meaning
 
-        hanja = next((r.data.get("hj") for r in rows if r.data.get("hj")), "")
+        ko_rows = [r for r in rows if r.src == "ko"]
+        en_rows = [r for r in rows if r.src == "en"]
+        kodict_rows = [r for r in ko_rows if r.data.get("d")]
+        unit_order = {"단어": 0, "": 1, "구": 2, "관용구": 3, "속담": 4}
+        kodict_rows.sort(key=lambda r: (unit_order.get(r.data.get("u", ""), 5), r.data.get("n") or 0))
+        wiki_rows = [r for r in ko_rows if not r.data.get("d")]
+
+        res.headword = (kodict_rows or ko_rows or rows)[0].word if rows else key
+        first = kodict_rows[0].data if kodict_rows else {}
+        hanja = first.get("hj") or next((r.data.get("hj") for r in rows if r.data.get("hj")), "")
+        pron = f"[{first['pr']}]" if first.get("pr") else ""
         rom = next((r.data.get("rom") for r in rows if r.data.get("rom")), "")
         ipa = next((r.data["ipa"][0] for r in rows if r.data.get("ipa")), "")
-        res.ipa = " · ".join(x for x in (hanja, rom, ipa) if x)
+        res.ipa = " · ".join(x for x in (hanja, pron or ipa, rom) if x)
 
-        # 1) 영어 대응어 (클릭하면 영한 검색)
+        # 1) 국어 뜻풀이 — 맨 위
+        if kodict_rows:
+            srcs = sorted({r.data["d"] for r in kodict_rows}, key=lambda d: d != "표준")
+            doc.line(("국어 뜻풀이", "sec", None), ("   " + " · ".join(
+                "표준국어대사전" if d == "표준" else d for d in srcs), "dim", None))
+            last_head, num, shown = None, 0, 0
+            for r in kodict_rows:
+                d = r.data
+                head = (r.word, d.get("n") or 0)
+                if head != last_head:
+                    if shown >= 15:
+                        doc.line(("  … 같은 소리의 단어가 더 있어요. 웹사전에서 확인해 보세요.", "note", None))
+                        break
+                    shown += 1
+                    last_head, num = head, 0
+                    segs = [("▪ " + r.word + (str(head[1]).translate(SUP_DIGITS) if head[1] else ""), "pos", None)]
+                    extra = " ".join(x for x in (d.get("hj"), d.get("or"), f"[{d['pr']}]" if d.get("pr") else "") if x)
+                    if extra:
+                        segs.append(("  " + extra, "dim", None))
+                    doc.line(*segs)
+                label = d.get("p") or d.get("u") or ""
+                if label:
+                    doc.line(("  「" + label + "」", "tag", None))
+                for s in d.get("s", [])[:20]:
+                    num += 1
+                    doc.line((f"  {num}. ", "num", None), *self._tags(s), (s.get("g", ""), "ko", None))
+            self._render_rel(doc, kodict_rows)
+            doc.blank()
+        elif wiki_rows:
+            doc.line(("국어 뜻풀이", "sec", None))
+            for r in wiki_rows:
+                p = r.data.get("p")
+                doc.line(("• " + (r.data.get("pt") or POS_KO.get(p, p or "")), "pos", None))
+                for i, s in enumerate(r.data.get("s", [])[:12], 1):
+                    doc.line((f"  {i}. ", "num", None), (s.get("g", ""), "ko", None))
+            doc.blank()
+
+        # 2) 영어 대응어 (클릭하면 영한 검색)
         en_words: list[tuple[str, str]] = []
         seen = set()
         for en, sense in pairs:
@@ -421,7 +658,6 @@ class Dictionary:
                 continue
             seen.add(en.lower())
             en_words.append((en, sense or ""))
-        en_rows = [r for r in rows if r.src == "en"]
         if en_words:
             doc.line(("영어 대응어", "sec", None))
             for en, sense in en_words[:25]:
@@ -431,7 +667,7 @@ class Dictionary:
                 doc.line(*segs)
             doc.blank()
 
-        # 2) 영어판: 한국어 단어의 영어 뜻
+        # 3) 영어판: 한국어 단어의 영어 뜻
         if en_rows:
             doc.line(("영어 뜻풀이", "sec", None))
             for r in en_rows:
@@ -445,21 +681,41 @@ class Dictionary:
                         segs.append(("  → ", "dim", None))
                         segs.append((s["fo"], "link", s["fo"]))
                     doc.line(*segs)
-            doc.blank()
-
-        # 3) 한국어판: 국어 뜻풀이
-        ko_rows = [r for r in rows if r.src == "ko"]
-        if ko_rows:
-            doc.line(("국어 뜻풀이", "sec", None))
-            for r in ko_rows:
-                p = r.data.get("p")
-                doc.line(("• " + (r.data.get("pt") or POS_KO.get(p, p or "")), "pos", None))
-                for i, s in enumerate(r.data.get("s", [])[:12], 1):
-                    doc.line((f"  {i}. ", "num", None), (s.get("g", ""), "ko", None))
 
         res.meaning_en = res.meaning
+        # 어원 탭: 국어사전의 원어(한자·외래어 원어) 정보
+        last = None
+        for r in kodict_rows:
+            d = r.data
+            head = (r.word, d.get("n") or 0)
+            if head == last or not (d.get("hj") or d.get("or")):
+                continue
+            last = head
+            res.etymology.line((r.word + (str(head[1]).translate(SUP_DIGITS) if head[1] else ""), "pos", None),
+                               ("   " + ("표준국어대사전" if d.get("d") == "표준" else d.get("d", "")), "dim", None))
+            res.etymology.line(("원어: " + " ".join(x for x in (d.get("hj"), d.get("or")) if x), "ko", None))
+            res.etymology.blank()
         self._render_etymology(rows, res)
-        self._render_examples(rows, res)
+        self._render_examples(kodict_rows + [r for r in rows if r not in kodict_rows], res)
+
+    def _render_rel(self, doc: Doc, rows: list[Row]):
+        syn, ant = [], []
+        for r in rows:
+            for w in r.data.get("syn", []):
+                if w not in syn:
+                    syn.append(w)
+            for w in r.data.get("ant", []):
+                if w not in ant:
+                    ant.append(w)
+        for title, words in (("비슷한말", syn), ("반대말", ant)):
+            if not words:
+                continue
+            segs = [("  " + title + "  ", "sec", None)]
+            for j, w in enumerate(words[:10]):
+                if j:
+                    segs.append((", ", "dim", None))
+                segs.append((w, "link", w))
+            doc.line(*segs)
 
     # ---------------------------------------------------------- 어원 / 예문
     def _render_etymology(self, rows: list[Row], res: Result):

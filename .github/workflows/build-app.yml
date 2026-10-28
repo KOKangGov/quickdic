@@ -33,7 +33,7 @@ jobs:
       - name: 기본 동작 점검
         run: |
           python tests/make_sample.py sample
-          python tools/build_db.py --en sample/en.jsonl.gz --ko sample/ko.jsonl.gz --out sample/test.db
+          python tools/build_db.py --en sample/en.jsonl.gz --ko sample/ko.jsonl.gz --out sample/test.db --kodict sample/stdict.zip sample/opendict.json
           python tests/smoke_test.py sample/test.db
 
       - name: 버전·저장소 정보 넣기
