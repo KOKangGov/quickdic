@@ -22,7 +22,7 @@
 ```
  [GitHub Actions: 매주 월요일 새벽]                     [사용자 PC]
   kaikki.org 위키낱말 데이터 내려받기                     QuickDic.exe 실행
-  + 'source-data' 릴리스의 국립국어원 사전 zip
+  + 'source-data' 브랜치의 국립국어원 사전 정리본 zip
         ↓ tools/build_db.py                              ↓ 7일마다 version.json 확인
   quickdic.db 만들기 → 압축                                ↓ 새 버전이면 백그라운드로 받아 교체
         ↓                                                 오프라인 검색 (0.1초 이내)
@@ -46,7 +46,7 @@
 
 ## 국내 사전(국어 뜻풀이) 원본 올리기
 
-국립국어원 사전은 로그인해야 받을 수 있어서 자동으로 내려받지 못합니다. 저장소 주인이 한 번 받아서 올려 두면
+국립국어원 사전은 로그인해야 받을 수 있어서 자동으로 내려받지 못합니다. 저장소 주인이 한 번 받아서 정리본을 올려 두면
 매주 사전 빌드 때 그 파일을 씁니다. (올려 두지 않으면 예전처럼 한국어판 위키낱말사전의 국어 뜻풀이를 씁니다)
 
 1. [표준국어대사전](https://stdict.korean.go.kr) 에 회원 가입·로그인 → **사전 내려받기** 메뉴에서 **JSON** 형식 zip 을 받습니다.
@@ -56,7 +56,8 @@
    ```
    python tools/clean_kodict.py "전체 내려받기_표준국어대사전_JSON_날짜.zip" stdict-clean.zip
    ```
-3. 저장소 → **Releases** → `source-data` 릴리스 → **Edit** → 예전 zip 은 지우고 `stdict-clean.zip` 을 끌어다 놓고 저장
+3. 저장소의 `source-data` 브랜치에 있는 `stdict-clean.zip` 을 새 정리본으로 바꿔 올립니다
+   (GitHub 화면: 브랜치를 `source-data` 로 바꾸고 → **Add file → Upload files** → 같은 이름으로 올리기)
 4. **Actions** → **사전 데이터 만들기 (주 1회)** → **Run workflow** 로 바로 다시 만들 수 있습니다.
 
 사전 내용이 바뀌는 것은 몇 달에 한 번이라, 가끔(예: 분기마다) 새 zip 으로 바꿔 올리면 충분합니다.

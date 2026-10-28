@@ -28,20 +28,23 @@ jobs:
       - name: 빠른 JSON 처리 도구·단어 빈도표 설치
         run: pip install orjson wordfreq
 
-      # 국립국어원 사전(표준국어대사전/우리말샘)은 로그인해야 받을 수 있어서,
-      # 저장소 주인이 직접 받은 JSON zip 을 'source-data' 릴리스에 올려 두면 그걸 씁니다.
+      # 국립국어원 사전(표준국어대사전/우리말샘)은 로그인해야 받을 수 있어서, 저장소 주인이 받은 파일의
+      # 정리본(tools/clean_kodict.py)을 'source-data' 브랜치(또는 같은 이름의 릴리스)에 올려 두면 그걸 씁니다.
       # 없으면 예전처럼 한국어판 위키낱말사전의 국어 뜻풀이를 씁니다.
-      - name: 국내 사전 원본 가져오기 ('source-data' 릴리스에 올린 zip)
+      - name: 국내 사전 원본 가져오기 ('source-data' 브랜치/릴리스의 zip)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p data/kodict
-          if gh release download source-data --pattern '*.zip' --dir data/kodict 2>/dev/null; then
-            ls -lh data/kodict
-            echo "KODICT_DATE=$(gh release view source-data --json assets --jq '[.assets[] | select(.name | endswith(".zip")) | .updatedAt] | max' | cut -c1-10)" >> "$GITHUB_ENV"
+          if git fetch --depth=1 origin source-data 2>/dev/null; then
+            git archive FETCH_HEAD | tar -x -C data/kodict --wildcards '*.zip'
+            echo "KODICT_DATE=$(git log -1 --format=%cs FETCH_HEAD)" >> "$GITHUB_ENV"
+          elif gh release download source-data --pattern '*.zip' --dir data/kodict 2>/dev/null; then
+            echo "KODICT_DATE=$(date -u +%Y-%m-%d)" >> "$GITHUB_ENV"
           else
-            echo "국내 사전 원본이 아직 없어요 (source-data 릴리스에 zip 을 올리면 다음 빌드부터 반영)"
+            echo "국내 사전 원본이 아직 없어요 (source-data 브랜치에 정리본 zip 을 올리면 다음 빌드부터 반영)"
           fi
+          ls -lh data/kodict || true
 
       - name: 위키낱말사전 원본 데이터 내려받기 (영어판 약 3GB, 한국어판 약 26MB)
         run: |
