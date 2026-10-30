@@ -219,7 +219,7 @@ def compose_jamo(seq: list[str]) -> str:
         v = JUNG.index(v_j)
         t = 0
         # 받침: 다음이 자음이고, 그 다음이 모음이 아니면 받침으로
-        if k < n and is_c(seq[k]) and seq[k] in JONG and not (k + 1 < n and is_v(seq[k + 1])):
+        if k < n and is_c(seq[k]) and seq[k] in JONG[1:] and not (k + 1 < n and is_v(seq[k + 1])):
             t_j = seq[k]
             k2 = k + 1
             if k2 < n and (t_j + seq[k2]) in T_JOIN and not (k2 + 1 < n and is_v(seq[k2 + 1])):

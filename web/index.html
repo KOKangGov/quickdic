@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>QuickDic 사전</title>
+<meta name="description" content="오프라인으로 쓰는 영한·한영·국어 사전 (표준국어대사전 + 위키낱말사전)">
+<meta name="theme-color" content="#2459C2">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icons/icon-192.png" alt="" width="26" height="26"><span>QuickDic</span></div>
+  <button class="icon-btn" id="btn-menu" aria-label="메뉴">
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+  </button>
+</header>
+
+<div class="search-wrap">
+  <form class="search" id="search-form" autocomplete="off">
+    <input id="q" type="search" enterkeyhint="search" placeholder="단어를 입력하거나 붙여넣으세요" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="검색어">
+    <button type="button" class="icon-btn" id="btn-clear" aria-label="지우기" hidden>
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <button type="button" class="paste-btn" id="btn-paste">붙여넣기</button>
+  </form>
+  <ul class="sugg" id="sugg" hidden></ul>
+</div>
+
+<main id="main">
+  <!-- 처음 실행: 사전 내려받기 -->
+  <section class="card setup" id="setup" hidden>
+    <h1>오프라인 사전을 내려받을게요</h1>
+    <p>처음 한 번만 사전 파일(<b id="setup-size">약 70MB</b>)을 받아 폰에 저장해요. 그 뒤로는 인터넷 없이도 바로 찾을 수 있어요.</p>
+    <p class="dim">Wi-Fi 에 연결된 상태에서 받는 걸 권해요.</p>
+    <button class="primary" id="btn-install">사전 내려받기</button>
+    <div class="progress" id="progress" hidden><div class="bar"><i id="progress-bar"></i></div><span id="progress-text"></span></div>
+    <p class="error" id="setup-error" hidden></p>
+  </section>
+
+  <!-- 처음 화면 -->
+  <section id="home" hidden>
+    <div class="banner" id="update-banner" hidden>
+      <span id="update-text">새 사전 데이터가 있어요.</span>
+      <button class="link-btn" id="btn-update">받기</button>
+    </div>
+    <div class="chips-block" id="recent-block" hidden>
+      <h2>최근 검색</h2>
+      <div class="chips" id="recent"></div>
+    </div>
+    <div class="tips card">
+      <h2>이렇게 써 보세요</h2>
+      <ul>
+        <li>다른 앱에서 단어를 길게 눌러 선택 → <b>공유</b> → <b>QuickDic</b> 을 고르면 바로 찾아요.</li>
+        <li>영어·한국어 아무거나 입력하세요. 오타가 있으면 비슷한 단어를 추천해요.</li>
+        <li>한/영 키를 잘못 두고 쳐도 알아서 바꿔 찾아요 (<code>tkrhk</code> → 사과).</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 검색 결과 -->
+  <section class="card result" id="result" hidden>
+    <div class="head">
+      <div class="hw-wrap">
+        <div class="hw" id="hw"></div>
+        <div class="ipa" id="ipa"></div>
+      </div>
+      <div class="acts">
+        <button class="icon-btn" id="btn-speak" aria-label="발음 듣기">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 010 7M18.5 6a8.5 8.5 0 010 12" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-star" aria-label="단어장에 넣기">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path id="star-path" d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.8z" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-web" aria-label="웹사전에서 보기">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M3.5 12h17M12 3.5c2.5 2.7 2.5 14.3 0 17M12 3.5c-2.5 2.7-2.5 14.3 0 17" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
+        </button>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="meaning" aria-selected="true">뜻</button>
+      <button role="tab" data-tab="etymology" aria-selected="false">어원</button>
+      <button role="tab" data-tab="examples" aria-selected="false">예문</button>
+      <label class="toggle" id="en-toggle" hidden><input type="checkbox" id="show-en"><span>영영</span></label>
+    </nav>
+    <div class="doc" id="doc"></div>
+  </section>
+</main>
+
+<!-- 메뉴 -->
+<div class="sheet-bg" id="sheet-bg" hidden></div>
+<aside class="sheet" id="sheet" hidden>
+  <div class="sheet-handle"></div>
+  <button class="sheet-item" data-act="wordbook">★ 단어장</button>
+  <button class="sheet-item" data-act="webdict">웹사전 고르기 <span class="dim" id="webdict-name"></span></button>
+  <button class="sheet-item" data-act="update">사전 업데이트 확인</button>
+  <button class="sheet-item" data-act="about">QuickDic 정보</button>
+  <div class="sheet-panel" id="sheet-panel"></div>
+</aside>
+
+<div class="toast" id="toast" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

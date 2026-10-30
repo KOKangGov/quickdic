@@ -563,7 +563,7 @@ class Dictionary:
         rows, pairs, seen = [], [], set()
         for k in dict.fromkeys((key, ko_key(key))):
             for r in self._rows(k, "ko"):
-                sig = (r.word, r.src, json.dumps(r.data, ensure_ascii=False, sort_keys=True)[:200])
+                sig = (r.word, r.src, json.dumps(r.data, ensure_ascii=False, sort_keys=True))
                 if sig not in seen:
                     seen.add(sig)
                     rows.append(r)
