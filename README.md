@@ -13,6 +13,9 @@
 - 항상 위 고정, 투명도 50~100%, 접기/펼치기, 창 위치·크기 기억, Windows 시작 시 자동 실행
 - 사전 데이터 **주 1회 자동 업데이트** (GitHub Actions 가 매주 새로 만들어 올림)
 
+**안드로이드폰·태블릿**: 웹앱(PWA) **https://kokanggov.github.io/quickdic/** — Chrome 으로 열고 '홈 화면에 추가' 하면 앱처럼 쓸 수 있어요.
+처음 한 번 모바일용 사전(약 70MB)을 받으면 인터넷 없이도 검색되고, 다른 앱에서 단어를 고른 뒤 **공유 → QuickDic** 으로 바로 찾을 수 있어요.
+
 > 사용자용 안내는 [RELEASE_NOTES.md](RELEASE_NOTES.md) 를 보세요. 아래는 **배포하는 사람(저장소 주인)** 을 위한 안내입니다.
 
 ---
@@ -63,6 +66,15 @@
 사전 내용이 바뀌는 것은 몇 달에 한 번이라, 가끔(예: 분기마다) 새 zip 으로 바꿔 올리면 충분합니다.
 출판물·신문에서 인용한 예문(출처가 달린 예문)은 저작권 때문에 자동으로 빼고 넣습니다.
 
+## 모바일 웹앱 (처음 한 번 설정)
+
+저장소 → **Settings → Pages → Build and deployment → Source** 를 **GitHub Actions** 로 바꿔 주세요.
+그 뒤로는 웹앱 코드가 바뀌거나 주간 사전 빌드가 끝날 때마다 **모바일 웹앱 배포** 워크플로가 자동으로 올립니다.
+
+- 사전은 폰 저장소(OPFS)에 저장되고 SQLite(WebAssembly)로 검색합니다. 서버가 필요 없어요.
+- 웹앱은 새 사전이 올라오면 "새 사전 데이터가 있어요" 로 알려 주고, 누르면 받아서 바꿉니다.
+- 검색 규칙은 PC판(`app/dictdb.py`)과 같아야 합니다. 한쪽을 고치면 `web/dict.js` 도 같이 고쳐 주세요.
+
 ## 새 버전 내기
 
 코드를 고친 뒤 **앱 만들기** 를 다시 실행하면서 버전을 올려 주세요(예: `1.0.1`).
@@ -82,7 +94,10 @@
 | `tools/kodict.py` | 국립국어원 표준국어대사전·우리말샘 JSON 읽기 |
 | `tools/clean_kodict.py` | 국립국어원 원본 zip → 공개해도 되는 정리본 zip (인용 예문·미디어 제거) |
 | `tools/package_db.py` | 사전 압축 + `version.json` 생성 |
-| `.github/workflows/` | 주간 사전 빌드, exe 빌드 |
+| `web/` | 모바일 웹앱(PWA): 화면(`app.js`), 검색(`dict.js` — `app/dictdb.py` 를 옮긴 것), 오타 추천(`fuzzy.js`), 사전 작업 스레드(`worker.js`) |
+| `tools/make_mobile_db.py` | PC용 사전 → 모바일용 작은 사전 (한국어 전부 + 한국어 뜻 있는/자주 쓰는 영어) |
+| `tools/build_web.sh` | 웹앱 사이트 만들기 (SQLite WebAssembly·pako 포함, 사전을 20MB 조각으로) |
+| `.github/workflows/` | 주간 사전 빌드, exe 빌드, 웹앱 배포(GitHub Pages) |
 
 사용자 PC 에 저장되는 곳: 설정·단어장 `%APPDATA%\QuickDic`, 사전 파일 `%LOCALAPPDATA%\QuickDic`
 
@@ -105,7 +120,8 @@ python app\quickdic.py
 | 웹사전 버튼 (네이버 기본, 변경 가능) | ✅ |
 | 주 1회 자동 업데이트, 실패 시 24시간 뒤 재시도 | ✅ (변경분만 받는 방식이 아니라 전체 파일 교체) |
 | 발음, 단어장·CSV, 최근 검색, 투명도 | ✅ |
-| macOS / 안드로이드 태블릿 | ⏳ 다음 단계 (Flutter 등으로 별도 작업 필요) |
+| 안드로이드 스마트폰·태블릿 | ✅ 웹앱(PWA), 오프라인 사전, 공유하기로 검색 |
+| macOS / 아이폰 | ⏳ 다음 단계 (웹앱은 열리지만 공유하기 검색은 안드로이드만) |
 | 화면 캡처 OCR (Alt+Shift+Q) | ⏳ 다음 단계 |
 | 일한·중한·불한 언어팩 | ⏳ 다음 단계 |
 

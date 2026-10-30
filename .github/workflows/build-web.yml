@@ -1,0 +1,86 @@
+name: 모바일 웹앱 배포 (GitHub Pages)
+
+# 안드로이드폰·태블릿에서 쓰는 QuickDic 웹앱을 GitHub Pages 에 올립니다.
+#  - 웹앱 코드(web/)가 바뀌었을 때
+#  - 주간 '사전 데이터 만들기' 가 끝났을 때 (새 사전으로 모바일 사전도 다시 만듦)
+#  - Actions 탭에서 직접 실행할 때
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", "tools/make_mobile_db.py", "tools/build_web.sh", ".github/workflows/build-web.yml"]
+  workflow_run:
+    workflows: ["사전 데이터 만들기 (주 1회)"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: PC용 사전 내려받기 (dictionary 릴리스)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download dictionary --pattern quickdic.db.gz --dir . 
+          gunzip -f quickdic.db.gz
+          ls -lh quickdic.db
+
+      - name: 모바일용 작은 사전 만들기
+        run: python tools/make_mobile_db.py quickdic.db quickdic-mobile.db
+
+      - name: 사전 검색 점검 (PC판과 같은 결과인지)
+        run: |
+          cat > /tmp/check.mjs <<'JS'
+          import { DatabaseSync } from "node:sqlite";
+          import zlib from "node:zlib";
+          import { Dictionary } from "./web/dict.js";
+          const raw = new DatabaseSync("quickdic-mobile.db", { readOnly: true });
+          const d = new Dictionary({
+            all: (sql, p = []) => raw.prepare(sql).all(...p).map((o) => Object.values(o)),
+            inflate: (b) => zlib.inflateSync(Buffer.from(b)).toString("utf8"),
+          });
+          const ok = (c, m) => { if (!c) { console.error("실패:", m); process.exit(1); } };
+          let r = d.lookup("사과"); ok(r.found && r.meaning.plainText().startsWith("국어 뜻풀이"), "사과");
+          r = d.lookup("ephemeral"); ok(r.found && r.hasKo, "ephemeral");
+          r = d.lookup("tkrhk"); ok(r.found && r.headword === "사과", "tkrhk");
+          r = d.lookup("맛잇다"); ok(!r.found && r.suggestions[0] === "맛있다", "맛잇다");
+          console.log("모바일 사전 점검 통과");
+          JS
+          cp /tmp/check.mjs ./check.mjs && node --no-warnings check.mjs && rm check.mjs
+
+      - name: 웹앱 사이트 만들기
+        run: tools/build_web.sh quickdic-mobile.db site "$(date -u +%Y.%m.%d)-${GITHUB_SHA::7}"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
