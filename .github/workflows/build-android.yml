@@ -1,0 +1,72 @@
+name: 안드로이드 선택검색 앱 만들기 (APK)
+
+# 안드로이드 '글자 선택 메뉴'에 QuickDic 을 넣어 주는 작은 도우미 앱(APK)을 만들어 릴리스에 올립니다.
+# Actions 탭 → 이 워크플로 → Run workflow → 버전 입력 → 실행
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "버전 번호 (예: 1.0.0)"
+        required: true
+        default: "1.0.0"
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/build-android.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: 서명 키 준비
+        env:
+          KS_B64: ${{ secrets.QUICKDIC_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/quickdic.jks"
+            echo "QUICKDIC_KEYSTORE_FILE=$RUNNER_TEMP/quickdic.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::서명 키 비밀값이 없어 디버그 키로 만듭니다 (새 버전 덮어 설치가 안 될 수 있어요)"
+          fi
+
+      - name: APK 만들기
+        working-directory: android
+        env:
+          QUICKDIC_KEYSTORE_PASSWORD: ${{ secrets.QUICKDIC_KEYSTORE_PASSWORD }}
+          QUICKDIC_VERSION_NAME: ${{ inputs.version || '1.0.0' }}
+          QUICKDIC_VERSION_CODE: ${{ github.run_number }}
+          QUICKDIC_WEB_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+        run: |
+          gradle --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk ../QuickDic-select.apk
+          ls -lh ../QuickDic-select.apk
+
+      - name: 릴리스에 올리기 ('android' 릴리스)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="${{ inputs.version || '1.0.0' }}"
+          NOTES="안드로이드 '글자 선택 메뉴'에 QuickDic 을 넣어 주는 도우미 앱 (v$VER).
+
+          설치: 폰에서 아래 QuickDic-select.apk 를 눌러 받고 → 설치 (처음이면 '출처를 알 수 없는 앱 설치' 허용).
+          사용: 어느 앱에서든 단어를 길게 눌러 고른 뒤 메뉴에서 QuickDic 을 누르면 바로 찾아요. (안 보이면 ⋮ 더보기)
+          사전은 QuickDic 웹앱(https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/)에서 한 번 받아 두어야 해요."
+          if gh release view android >/dev/null 2>&1; then
+            gh release edit android --title "안드로이드 선택검색 앱 v$VER" --notes "$NOTES"
+          else
+            gh release create android --title "안드로이드 선택검색 앱 v$VER" --notes "$NOTES" --latest=false
+          fi
+          gh release upload android QuickDic-select.apk --clobber
