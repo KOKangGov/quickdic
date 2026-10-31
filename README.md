@@ -14,7 +14,10 @@
 - 사전 데이터 **주 1회 자동 업데이트** (GitHub Actions 가 매주 새로 만들어 올림)
 
 **안드로이드폰·태블릿**: 웹앱(PWA) **https://kokanggov.github.io/quickdic/** — Chrome 으로 열고 '홈 화면에 추가' 하면 앱처럼 쓸 수 있어요.
-처음 한 번 모바일용 사전(약 70MB)을 받으면 인터넷 없이도 검색되고, 다른 앱에서 단어를 고른 뒤 **공유 → QuickDic** 으로 바로 찾을 수 있어요.
+처음 한 번 모바일용 사전(약 70MB)을 받으면 인터넷 없이도 검색돼요.
+다른 앱에서 단어를 고르자마자 찾으려면 **선택검색 도우미 앱**(`QuickDic-select.apk`, [android 릴리스](https://github.com/KOKangGov/quickdic/releases/tag/android))을 설치하세요.
+안드로이드의 글자 선택 메뉴(복사·공유 옆)에 **QuickDic** 이 생기고, 누르면 웹앱이 그 단어로 바로 열려요.
+(웹앱만으로는 이 메뉴에 들어갈 수 없어서 따로 만든 작은 앱이에요. 사전·인터넷 권한 없이 단어만 웹앱에 넘겨 줍니다 — 코드는 `android/`)
 
 > 사용자용 안내는 [RELEASE_NOTES.md](RELEASE_NOTES.md) 를 보세요. 아래는 **배포하는 사람(저장소 주인)** 을 위한 안내입니다.
 
@@ -97,7 +100,8 @@
 | `web/` | 모바일 웹앱(PWA): 화면(`app.js`), 검색(`dict.js` — `app/dictdb.py` 를 옮긴 것), 오타 추천(`fuzzy.js`), 사전 작업 스레드(`worker.js`) |
 | `tools/make_mobile_db.py` | PC용 사전 → 모바일용 작은 사전 (한국어 전부 + 한국어 뜻 있는/자주 쓰는 영어) |
 | `tools/build_web.sh` | 웹앱 사이트 만들기 (SQLite WebAssembly·pako 포함, 사전을 20MB 조각으로) |
-| `.github/workflows/` | 주간 사전 빌드, exe 빌드, 웹앱 배포(GitHub Pages) |
+| `android/` | 안드로이드 선택검색 도우미 앱 — 글자 선택 메뉴의 'QuickDic' → 웹앱(`?text=단어`)으로 넘김 |
+| `.github/workflows/` | 주간 사전 빌드, exe 빌드, 웹앱 배포(GitHub Pages), 안드로이드 APK 빌드 |
 
 사용자 PC 에 저장되는 곳: 설정·단어장 `%APPDATA%\QuickDic`, 사전 파일 `%LOCALAPPDATA%\QuickDic`
 
@@ -134,3 +138,9 @@ PRD 는 Flutter 를 제안했지만, Windows 우선 배포를 빠르게 하기 �
 - 사전 데이터: [Wiktionary](https://www.wiktionary.org/) 기여자들, CC BY-SA 4.0 / GFDL — [kaikki.org](https://kaikki.org/) 의 Wiktextract 추출본 사용
 - 국어 뜻풀이: 국립국어원 표준국어대사전·우리말샘, CC BY-SA 2.0 KR
 - 오타 추천 순위용 단어 빈도: [wordfreq](https://github.com/rspeer/wordfreq) (CC BY-SA 4.0) — 자세한 내용은 [NOTICE](NOTICE)
+
+## 안드로이드 선택검색 앱 서명 키 (선택)
+
+APK 는 **안드로이드 선택검색 앱 만들기** 워크플로가 만들어 `android` 릴리스에 올립니다.
+저장소 비밀값 `QUICKDIC_KEYSTORE_B64`(키스토어 base64), `QUICKDIC_KEYSTORE_PASSWORD` 가 있으면 그 키로 서명하고,
+없으면 매번 다른 디버그 키로 서명합니다. 이 경우 새 버전을 설치할 때 기존 앱을 먼저 지워야 해요.

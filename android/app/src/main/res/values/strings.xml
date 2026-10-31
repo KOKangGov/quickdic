@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">QuickDic 선택검색</string>
+    <string name="menu_label">QuickDic</string>
+    <string name="help_title">QuickDic 선택검색</string>
+    <string name="help_body">어느 앱에서든 단어를 길게 눌러 고른 뒤, 나오는 메뉴에서 \'QuickDic\' 을 누르면 바로 뜻을 찾아요.\n\n메뉴에 안 보이면 ⋮(더보기) 를 눌러 보세요.\n\n처음 한 번은 아래 \'사전 열기\' 로 QuickDic 웹앱을 열어 사전을 받아 두어야 인터넷 없이 찾을 수 있어요.</string>
+    <string name="open_app">사전 열기</string>
+    <string name="close">닫기</string>
+    <string name="no_browser">Chrome 이 없어 QuickDic 을 열 수 없어요.</string>
+</resources>
