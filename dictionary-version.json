@@ -1,10 +1,10 @@
 {
-  "version": "2026.11.01",
+  "version": "2026.11.08",
   "schema": 2,
-  "built_at": "2026-11-01T22:10:28+00:00",
+  "built_at": "2026-11-08T22:15:58+00:00",
   "file": "quickdic.db.gz",
   "gz_size": 222922939,
-  "gz_sha256": "7de0eb0159838a6bd6b8fa2b4ee817795b8f82a2722391521a1a6c050f302449",
+  "gz_sha256": "c9f4dc650dca598ea41cd6ea2674523674f29284c6591d90167bf4a6c0436ee7",
   "db_size": 329695232,
   "en_source": "Fri, 30 Oct 2026 20:48:24 GMT",
   "ko_source": "Fri, 30 Oct 2026 20:51:01 GMT",
