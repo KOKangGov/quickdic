@@ -1,5 +1,9 @@
 // QuickDic 모바일(웹앱) 화면
 import { cleanQuery, isKorean } from "./dict.js";
+import {
+  looksLikeSentence, translate as runTranslate, webUrl, normalize as trNormalize, detectLang, targetFor,
+  LANG_NAMES, ENGINES, builtinSupported, MAX_CHARS,
+} from "./translate.js";
 
 const $ = (id) => document.getElementById(id);
 const APP_VERSION = "__APP_VERSION__"; // 배포할 때 채워짐
@@ -39,7 +43,13 @@ const call = (type, payload = {}) => new Promise((resolve, reject) => {
 });
 
 // ------------------------------------------------------------------ 상태
-const state = { ready: false, version: "", result: null, tab: "meaning", remote: null };
+const state = {
+  ready: false, version: "", result: null, tab: "meaning", remote: null,
+  // 번역: mode 'dict' 사전 결과 / 'trans' 문장 번역
+  mode: "dict", transRaw: "", trans: null, transErr: "", transToken: 0, transWord: null,
+};
+const trEnabled = () => store.get("trEnabled", true);
+const trOpts = () => ({ engine: store.get("trEngine", "mymemory"), email: store.get("trEmail", ""), googleKey: store.get("trGoogleKey", "") });
 
 function show(section) {
   for (const id of ["setup", "home", "result"]) $(id).hidden = id !== section;
@@ -95,9 +105,8 @@ function sharedQuery() {
   const raw = p.get("text") || p.get("title") || p.get("q") || "";
   if (!raw) return "";
   history.replaceState(null, "", location.pathname);
-  // 공유된 글이 길면 첫 줄만 (주소는 빼고)
-  const line = raw.split(/\n/)[0].replace(/https?:\/\/\S+/g, "").trim();
-  return line;
+  // 주소는 빼고 넘김 (문장이면 번역, 단어면 사전)
+  return raw.replace(/https?:\/\/\S+/g, "").trim();
 }
 
 async function install(info) {
@@ -234,6 +243,8 @@ function hideSuggest() { $("sugg").hidden = true; $("sugg").replaceChildren(); s
 // ------------------------------------------------------------------ 검색 / 결과
 async function search(raw, { push = true, replace = false } = {}) {
   hideSuggest();
+  // 문장(4단어 이상·40자 넘음·여러 줄 등)은 사전 대신 번역
+  if (trEnabled() && looksLikeSentence(raw || "")) return translateText(raw, { push, replace });
   const text = cleanQuery(raw || "");
   if (!text) return;
   if (!state.ready) { toast("먼저 사전을 내려받아 주세요."); return; }
@@ -242,7 +253,12 @@ async function search(raw, { push = true, replace = false } = {}) {
   q.blur();
   let r;
   try { r = await call("lookup", { q: text }); } catch (err) { toast("검색 중 오류: " + err.message); return; }
+  state.mode = "dict";
+  state.transToken++;            // 진행 중이던 번역 결과는 버림
+  state.transWord = null; state.trans = null; state.transErr = ""; state.transRaw = "";
   state.result = r.res;
+  // 사전에 없는 여러 단어(짧은 구절)나 일본어·중국어 등은 번역해서 보여 줌
+  if (!r.res.found && trEnabled() && (text.split(" ").length >= 2 || ["ja", "zh", "ru"].includes(detectLang(text)))) return translateText(text, { push, replace });
   state.tab = "meaning";
   render();
   if (r.res.found) addRecent(r.res.headword);
@@ -256,9 +272,69 @@ window.addEventListener("popstate", (e) => {
   else { q.value = ""; $("btn-clear").hidden = true; goHome(); }
 });
 
+// ------------------------------------------------------------------ 번역
+async function translateText(raw, { push = true, replace = false, wordOnly = false } = {}) {
+  const text = trNormalize(raw || "");
+  if (!text) return;
+  if (!trEnabled()) { toast("번역 기능이 꺼져 있어요. 메뉴 → 번역 설정에서 켤 수 있어요.", 3000); return; }
+  const token = ++state.transToken;
+  state.transRaw = text; state.trans = null; state.transErr = "";
+  if (!wordOnly) {
+    state.mode = "trans";
+    state.result = null;
+    q.value = text.replace(/\s+/g, " ");
+    $("btn-clear").hidden = false;
+    q.blur();
+    if (replace) history.replaceState({ q: text }, "", location.pathname);
+    else if (push) history.pushState({ q: text }, "", location.pathname);
+    window.scrollTo({ top: 0 });
+  }
+  state.tab = "translate";
+  render();
+  try { state.trans = await runTranslate(text, trOpts()); } catch (err) { state.transErr = err.message || String(err); }
+  if (token !== state.transToken) return; // 그사이 다른 검색을 했으면 버림
+  if (state.tab === "translate") render();
+}
+
+function transLines() {
+  if (!trEnabled()) return [[["번역 기능이 꺼져 있어요. 메뉴 → 번역 설정에서 켤 수 있어요.", "note", null]]];
+  const L = [];
+  if (state.transErr) {
+    L.push([[state.transRaw, "src", null]], [], [[state.transErr, "note", null]], [],
+      [["→ 파파고 웹 번역에서 열기", "link", "@webtrans"]], [["→ 번역 설정 바꾸기", "link", "@trsettings"]]);
+    return L;
+  }
+  const t = state.trans;
+  if (!t) return [[[state.transRaw, "src", null]], [], [["번역하는 중…", "dim", null]]];
+  L.push([[`원문 (${LANG_NAMES[t.src] || t.src})`, "sec", null]], ...t.source.split("\n\n").map((p) => [[p, "src", null]]), []);
+  L.push([[`번역 (${LANG_NAMES[t.tgt] || t.tgt})`, "sec", null]], ...t.text.split("\n\n").map((p) => [[p, "out", null]]), []);
+  if (t.truncated) L.push([[`글이 길어서 앞부분 ${MAX_CHARS}자만 번역했어요.`, "note", null]]);
+  L.push([["번역 결과 복사", "link", "@copytrans"], ["   ·   ", "dim", null], ["파파고 웹 번역에서 보기", "link", "@webtrans"]]);
+  L.push([[`${t.engineName} 번역 · 문장은 인터넷의 번역 서비스로 보내져요 (단어 검색은 오프라인)`, "dim", null]]);
+  return L;
+}
+
+async function copyTrans() {
+  if (!state.trans) return;
+  try { await navigator.clipboard.writeText(state.trans.text); toast("번역 결과를 복사했어요."); }
+  catch { toast("복사하지 못했어요. 글을 길게 눌러 복사해 주세요."); }
+}
+
 function render() {
-  const res = state.result;
   show("result");
+  for (const b of document.querySelectorAll(".tabs [role=tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === state.tab));
+  if (state.mode === "trans") {
+    const src = detectLang(state.transRaw);
+    $("hw").textContent = `번역 ${LANG_NAMES[src] || src} → ${LANG_NAMES[targetFor(src)]}`;
+    $("ipa").textContent = "";
+    $("btn-star").hidden = true;      // 문장은 단어장에 넣지 않음
+    $("btn-speak").hidden = false;    // 원문 읽어 주기
+    $("en-toggle").hidden = true;
+    $("doc").replaceChildren(...renderLines(currentLines()));
+    return;
+  }
+  $("btn-star").hidden = false;
+  const res = state.result;
   $("hw").textContent = res.found ? res.headword : res.query;
   $("ipa").textContent = res.found ? res.ipa : "";
   $("btn-star").classList.toggle("on", isStarred(res.found ? res.headword : res.query));
@@ -266,11 +342,12 @@ function render() {
   const canEn = res.found && res.lang === "en" && res.hasKo && res.meaningEn.some((l) => l.length);
   $("en-toggle").hidden = !canEn;
   $("show-en").checked = store.get("showEn", false);
-  for (const b of document.querySelectorAll(".tabs [role=tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === state.tab));
   $("doc").replaceChildren(...renderLines(currentLines()));
 }
 
 function currentLines() {
+  if (state.tab === "translate") return transLines();
+  if (state.mode === "trans") return [[["문장을 번역하는 중이에요. 단어 뜻을 보려면 단어 하나만 골라 찾아 주세요.", "note", null]]];
   const res = state.result;
   if (!res.found) {
     const lines = [[[`‘${res.query}’ 은(는) 오프라인 사전에 없어요.`, "h1", null]], []];
@@ -329,7 +406,13 @@ function span([text, style, link]) {
   if (style) s.className = "s-" + style;
   if (link) {
     s.className = "s-link";
-    s.onclick = () => (link === "@web" ? openWeb() : search(link));
+    s.onclick = () => {
+      if (link === "@web") openWeb();
+      else if (link === "@webtrans") window.open(webUrl(state.transRaw), "_blank", "noopener");
+      else if (link === "@copytrans") copyTrans();
+      else if (link === "@trsettings") { openSheet(); showTrSettings(); }
+      else search(link);
+    };
   }
   return s;
 }
@@ -338,6 +421,11 @@ document.querySelector(".tabs").addEventListener("click", (e) => {
   const b = e.target.closest("[role=tab]");
   if (!b) return;
   state.tab = b.dataset.tab;
+  // 사전 결과를 보다가 '번역' 탭을 누르면 그 단어를 번역
+  if (state.tab === "translate" && state.mode === "dict" && state.result && trEnabled()) {
+    const w = state.result.found ? state.result.headword : state.result.query;
+    if (w && w !== state.transWord) { state.transWord = w; translateText(w, { wordOnly: true }); return; }
+  }
   render();
 });
 $("show-en").onchange = () => { store.set("showEn", $("show-en").checked); render(); };
@@ -345,9 +433,10 @@ $("show-en").onchange = () => { store.set("showEn", $("show-en").checked); rende
 // ------------------------------------------------------------------ 발음 / 단어장 / 웹사전
 $("btn-speak").onclick = () => {
   const res = state.result;
-  if (!res || !("speechSynthesis" in window)) return toast("이 기기에서는 발음 듣기를 쓸 수 없어요.");
-  const u = new SpeechSynthesisUtterance(res.headword);
-  u.lang = isKorean(res.headword) ? "ko-KR" : "en-US";
+  const text = state.mode === "trans" ? state.transRaw.slice(0, 300) : res && res.headword;
+  if (!text || !("speechSynthesis" in window)) return toast("이 기기에서는 발음 듣기를 쓸 수 없어요.");
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = isKorean(text) ? "ko-KR" : "en-US";
   u.rate = 0.9;
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
@@ -356,6 +445,7 @@ $("btn-speak").onclick = () => {
 const isStarred = (w) => store.get("words", []).some((x) => x.w === w);
 $("btn-star").onclick = () => {
   const res = state.result;
+  if (!res) return;
   const w = res.found ? res.headword : res.query;
   let words = store.get("words", []);
   if (isStarred(w)) { words = words.filter((x) => x.w !== w); toast("단어장에서 뺐어요."); }
@@ -370,6 +460,7 @@ $("btn-star").onclick = () => {
 };
 
 function openWeb() {
+  if (state.mode === "trans" && state.transRaw) { window.open(webUrl(state.transRaw), "_blank", "noopener"); return; }
   const res = state.result;
   const word = res ? (res.found ? res.headword : res.query) : q.value;
   const name = store.get("portal", "네이버 사전");
@@ -380,7 +471,37 @@ function openWeb() {
 $("btn-web").onclick = openWeb;
 
 // ------------------------------------------------------------------ 메뉴
-function openSheet() { $("sheet").hidden = false; $("sheet-bg").hidden = false; $("sheet-panel").replaceChildren(); $("webdict-name").textContent = store.get("portal", "네이버 사전"); }
+function openSheet() {
+  $("sheet").hidden = false; $("sheet-bg").hidden = false; $("sheet-panel").replaceChildren();
+  $("webdict-name").textContent = store.get("portal", "네이버 사전");
+  $("tr-name").textContent = trEnabled() ? ENGINES[trOpts().engine]?.short || "MyMemory" : "꺼짐";
+}
+
+// 번역 설정: 켜기/끄기, 번역 서비스 고르기, 키·이메일
+function showTrSettings() {
+  const panel = $("sheet-panel");
+  const el = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+  const refresh = () => { showTrSettings(); $("tr-name").textContent = trEnabled() ? ENGINES[trOpts().engine]?.short || "MyMemory" : "꺼짐"; };
+  const on = el("input", { type: "checkbox", checked: trEnabled() });
+  on.onchange = () => { store.set("trEnabled", on.checked); refresh(); };
+  const rows = [el("label", { className: "tr-row" }, on, " 문장은 번역하기 (인터넷 필요 · 고른 문장이 번역 서비스로 보내져요)")];
+  const cur = trOpts().engine;
+  for (const [key, e] of Object.entries(ENGINES)) {
+    const o = el("button", { className: "opt" + (key === cur ? " on" : ""), textContent: e.name });
+    if (key === "builtin" && !builtinSupported()) { o.disabled = true; o.textContent += " — 이 기기에서는 안 돼요"; }
+    o.onclick = () => { store.set("trEngine", key); refresh(); };
+    rows.push(o);
+  }
+  const field = (label, storeKey, placeholder, secret) => {
+    const inp = el("input", { type: secret ? "password" : "text", value: store.get(storeKey, ""), placeholder, autocomplete: "off" });
+    inp.onchange = () => { store.set(storeKey, inp.value.trim()); toast("저장했어요."); };
+    return el("label", { className: "tr-field" }, el("span", { className: "dim", textContent: label }), inp);
+  };
+  if (cur === "mymemory") rows.push(field("이메일 (선택 · 넣으면 하루 무료 사용량이 약 5,000자 → 50,000자)", "trEmail", "you@example.com"));
+  if (cur === "google") rows.push(field("Google Cloud Translation API 키 (이 폰에만 저장돼요)", "trGoogleKey", "AIza...", true));
+  rows.push(el("p", { className: "dim", textContent: "DeepL·파파고는 PC판(QuickDic.exe)에서 내 API 키로 쓸 수 있어요." }));
+  panel.replaceChildren(...rows);
+}
 function closeSheet() { $("sheet").hidden = true; $("sheet-bg").hidden = true; }
 $("btn-menu").onclick = openSheet;
 $("sheet-bg").onclick = closeSheet;
@@ -429,6 +550,8 @@ $("sheet").addEventListener("click", (e) => {
       o.onclick = () => { store.set("portal", name); $("webdict-name").textContent = name; panel.replaceChildren(); };
       return o;
     }));
+  } else if (act === "translate") {
+    showTrSettings();
   } else if (act === "update") {
     if (!state.ready) { closeSheet(); return; }
     checkUpdate(true);

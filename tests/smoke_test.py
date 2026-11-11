@@ -58,6 +58,27 @@ assert winsys.parse_hotkey("Ctrl+Shift+Q") == (winsys.MOD_CONTROL | winsys.MOD_S
 assert winsys.parse_hotkey("F8") == (0, 0x77)
 print("사전 검색 OK")
 
+# 번역: 문장/단어 구분, 언어 판단, 나눠 보내기 (인터넷 없이 확인할 수 있는 부분)
+import translate  # noqa: E402
+
+assert not translate.looks_like_sentence("ephemeral")
+assert not translate.looks_like_sentence("give up")
+assert not translate.looks_like_sentence("가게 기둥에 입춘")          # 짧은 숙어는 사전으로
+assert translate.looks_like_sentence("The quick brown fox jumps.")
+assert translate.looks_like_sentence("사과를 먹는 것을 좋아합니다")
+assert translate.looks_like_sentence("Hi. Bye")
+assert translate.detect_lang("사과를 먹어요") == "ko" and translate.target_for("ko") == "en"
+assert translate.detect_lang("Hello world") == "en" and translate.target_for("en") == "ko"
+assert translate.detect_lang("こんにちは") == "ja" and translate.detect_lang("你好") == "zh"
+assert translate.normalize("ephem-\neral  idea\n\nnext") == "ephemeral idea\n\nnext"
+long = translate.normalize("This is a sentence. " * 60 + "\n\n" + "한국어 문장입니다. " * 60)
+chunks = translate.split_chunks(long, 450)
+assert all(len(c.encode()) <= 450 for c in chunks) and "\n\n" in chunks
+assert translate._join(chunks, chunks) == long
+assert all(len(c.encode()) <= 450 for c in translate.split_chunks("가" * 2000, 450))
+assert translate.web_url("Hello there").startswith("https://papago.naver.com/?sk=en&tk=ko&st=Hello%20there")
+print("번역 준비 OK")
+
 if winsys.IS_WIN:
     ok = winsys.set_clipboard_text("QuickDic 클립보드 테스트")
     print("클립보드 쓰기:", ok, "/ 읽기:", winsys.get_clipboard_text())
