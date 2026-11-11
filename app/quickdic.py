@@ -4,6 +4,7 @@ QuickDic — 작은 플로팅 사전
   · 화면 위에 작은 사전 창을 띄워 두고
   · 다른 프로그램에서 단어를 드래그한 뒤 Alt+Q 를 누르면 바로 찾아 줍니다.
   · 위키낱말사전(Wiktionary) + 국립국어원 표준국어대사전 기반 오프라인 사전, 주 1회 자동 업데이트.
+  · 문장을 고르면 번역 서비스로 번역 (인터넷 필요, translate.py).
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from tkinter import filedialog, font as tkfont, messagebox, ttk
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config  # noqa: E402
+import translate  # noqa: E402
 import updater  # noqa: E402
 import winsys  # noqa: E402
 from dictdb import Dictionary, Doc, Result, clean_query, is_korean  # noqa: E402
@@ -113,6 +115,13 @@ class App:
         self.direction = "up"
         self.placeholder_msg = ""
         self.app_update_url = ""
+        # 번역
+        self.translator = translate.Translator(self.settings)
+        self.mode = "dict"          # 'dict' 사전 결과 / 'trans' 문장 번역
+        self.trans_raw = ""         # 번역 중인(한) 원문
+        self.trans_token = 0        # 늦게 도착한 이전 번역 결과는 버리기 위한 번호
+        self.translation: translate.Translation | None = None
+        self._trans_word = None     # 사전 결과에서 '번역' 탭으로 번역한 단어
 
         self._init_fonts()
         self._build_ui()
@@ -181,12 +190,13 @@ class App:
         self.entry.bind("<FocusIn>", self._clear_placeholder)
         self.entry.bind("<FocusOut>", lambda e: (self._set_placeholder(), self._hide_suggest_later()))
         self.entry.bind("<Return>", self._on_enter)
+        self.entry.bind("<Control-Return>", self._on_ctrl_enter)
         self.entry.bind("<KeyRelease>", self._on_type)
         self.entry.bind("<Down>", lambda e: self._move_suggest(1))
         self.entry.bind("<Up>", lambda e: self._move_suggest(-1))
         r.bind("<Escape>", lambda e: self._on_escape())
         r.bind("<Control-l>", lambda e: self.focus_entry())
-        for i in range(3):
+        for i in range(4):
             r.bind(f"<Control-Key-{i+1}>", lambda e, i=i: self.nb.select(i))
 
         # 메뉴 (≡)
@@ -196,6 +206,7 @@ class App:
         m.add_checkbutton(label="항상 위에 표시", variable=self.var_top,
                           command=lambda: self.set_topmost(self.var_top.get()))
         m.add_separator()
+        m.add_command(label="번역하기   Ctrl+Enter", command=lambda: self.translate_text(self.entry_text()))
         m.add_command(label="웹사전에서 열기", command=self.open_web)
         m.add_command(label="단어장", command=self.open_wordbook)
         m.add_command(label="설정", command=self.open_settings)
@@ -221,7 +232,7 @@ class App:
         FlatButton(top, "닫기 ▼", self.collapse, font=self.f["small"], tip="결과창 닫기 (Esc)").pack(side="right")
         FlatButton(top, "단어장", self.open_wordbook, font=self.f["small"], tip="저장한 단어 보기").pack(side="right")
         FlatButton(top, "웹사전", self.open_web, font=self.f["small"],
-                   tip="지금 단어를 포털 사전에서 열기").pack(side="right")
+                   tip="지금 단어를 포털 사전에서 열기 (번역 중이면 파파고 웹 번역)").pack(side="right")
         self.btn_pin = FlatButton(top, "고정", lambda: self.set_topmost(not self.settings["topmost"]),
                                   font=self.f["small"], tip="항상 위에 표시")
         self.btn_pin.pack(side="right")
@@ -258,7 +269,7 @@ class App:
         self.nb = ttk.Notebook(card, style="QD.TNotebook")
         self.nb.pack(fill="both", expand=True, padx=4, pady=(4, 4))
         self.tabs = {}
-        for key, label in (("meaning", " 뜻 "), ("ety", " 어원 "), ("ex", " 예문 ")):
+        for key, label in (("meaning", " 뜻 "), ("ety", " 어원 "), ("ex", " 예문 "), ("trans", " 번역 ")):
             frame = tk.Frame(self.nb, bg=C["panel"])
             self.nb.add(frame, text=label)
             if key == "meaning":
@@ -266,6 +277,7 @@ class App:
                 ttk.Checkbutton(frame, text="영영 정의 함께 보기", variable=self.var_en, style="QD.TCheckbutton",
                                 command=self._toggle_english).pack(anchor="e", padx=6, pady=(2, 0))
             self.tabs[key] = self._make_text(frame)
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
         # 자동완성 목록: 검색 막대 위(또는 아래)에 뜨는 작은 팝업
         self.sugg_win = tk.Toplevel(r)
@@ -309,9 +321,15 @@ class App:
             "h1": dict(font=self.f["body_b"]),
             "link": dict(foreground=C["accent"], underline=True),
             "hang": dict(lmargin1=0, lmargin2=26),
+            # 번역 원문·결과: 문단이라 내어쓰기 없이
+            "src": dict(foreground=C["tr"], lmargin1=0, lmargin2=0, spacing3=4),
+            "out": dict(foreground=C["ko"], font=(self.f["body"][0], self.f["body"][1] + 1),
+                        lmargin1=0, lmargin2=0, spacing3=4),
         }
         for k, v in styles.items():
             t.tag_configure(k, **v)
+        t.tag_raise("src", "hang")
+        t.tag_raise("out", "hang")
         t.tag_raise("link")
         t.tag_bind("link", "<Enter>", lambda e: t.config(cursor="hand2"))
         t.tag_bind("link", "<Leave>", lambda e: t.config(cursor="arrow"))
@@ -649,11 +667,18 @@ class App:
 
     # ------------------------------------------------------------------ 검색
     def search(self, raw: str, from_hotkey: bool = False):
-        q = clean_query(raw or "")
         self._hide_suggest()
+        # 문장(4단어 이상·40자 넘음·여러 줄 등)은 사전 대신 번역
+        if self.settings["translate_enabled"] and translate.looks_like_sentence(raw or ""):
+            self.translate_text(raw)
+            return
+        q = clean_query(raw or "")
         if not q:
             self.focus_entry()
             return
+        self.mode = "dict"
+        self.trans_token += 1          # 진행 중이던 번역 결과는 버림
+        self._trans_word = None
         self.set_entry(q)
         self.expand()  # 결과창이 검색 막대 위로 스르륵 펼쳐짐
         if not self.dict:
@@ -670,10 +695,16 @@ class App:
         if res.found:
             self.history.add(res.headword)
             self._refresh_chips()
+        elif self.settings["translate_enabled"] and (len(q.split()) >= 2 or translate.detect_lang(q) in ("ja", "zh", "ru")):
+            # 사전에 없는 여러 단어(짧은 구절)나 일본어·중국어 등은 번역해서 보여 줌
+            self.translate_text(q)
+            return
         self.entry.select_range(0, "end")
 
     def _render_result(self, res: Result):
         self.links.clear()
+        if not self.btn_star.winfo_manager():   # 번역 화면에서 숨겼던 ☆ 다시 보이기
+            self.btn_star.pack(side="right", before=self.btn_say)
         if not res.found:
             self.lbl_word.config(text=res.query)
             self.lbl_ipa.config(text="")
@@ -692,6 +723,7 @@ class App:
             empty.line(("검색 결과가 없어요.", "note", None))
             self._render(self.tabs["ety"], empty)
             self._render(self.tabs["ex"], empty)
+            self._reset_trans_tab()
             self.nb.select(0)
             return
 
@@ -701,6 +733,7 @@ class App:
         self._render(self.tabs["meaning"], self._meaning_doc(res))
         self._render(self.tabs["ety"], res.etymology)
         self._render(self.tabs["ex"], res.examples)
+        self._reset_trans_tab()
         self.nb.select(0)
 
     def _meaning_doc(self, res: Result) -> Doc:
@@ -717,7 +750,7 @@ class App:
     def _toggle_english(self):
         self.settings["show_english"] = bool(self.var_en.get())
         self.settings.save()
-        if self.result and self.result.found:
+        if self.mode == "dict" and self.result and self.result.found:
             self._render(self.tabs["meaning"], self._meaning_doc(self.result))
 
     def _render(self, t: tk.Text, doc: Doc):
@@ -746,6 +779,113 @@ class App:
         self._render(self.tabs["meaning"], doc)
         self.nb.select(0)
 
+    # ------------------------------------------------------------------ 번역
+    def _on_ctrl_enter(self, _e=None):
+        self._hide_suggest()
+        self.translate_text(self.entry_text())
+        return "break"
+
+    def translate_text(self, raw: str, *, word_only: bool = False):
+        """문장을 번역해 '번역' 탭에 보여 줌. word_only=True 면 사전 결과는 그대로 두고 번역 탭만 채움."""
+        text = translate.normalize(raw or "")
+        if not text:
+            self.focus_entry()
+            return
+        self.expand()
+        if not self.settings["translate_enabled"]:
+            doc = Doc()
+            doc.line(("번역 기능이 꺼져 있어요. ≡ 메뉴 → 설정에서 켤 수 있어요.", "note", None))
+            self._render(self.tabs["trans"], doc)
+            self.nb.select(3)
+            return
+        self.trans_token += 1
+        token = self.trans_token
+        self.trans_raw = text
+        if not word_only:
+            self.mode = "trans"
+            self.result = None
+            self.translation = None
+            self.set_entry(" ".join(text.split())[:500])
+            src = translate.detect_lang(text)
+            self.lbl_word.config(text=f"번역  {translate.LANG_NAMES.get(src, src)} → "
+                                      f"{translate.LANG_NAMES[translate.target_for(src)]}")
+            self.lbl_ipa.config(text="")
+            self.btn_star.pack_forget()        # 문장은 단어장에 넣지 않음
+            note = Doc()
+            note.line(("문장을 번역하는 중이에요. 단어 뜻을 보려면 단어 하나만 골라 찾아 주세요.", "note", None))
+            for key in ("meaning", "ety", "ex"):
+                self._render(self.tabs[key], note)
+        doc = Doc()
+        doc.line((text[:translate.MAX_CHARS], "src", None))
+        doc.blank()
+        doc.line(("번역하는 중…", "dim", None))
+        self._render(self.tabs["trans"], doc)
+        self.nb.select(3)
+        self.status(f"{translate.ENGINES[self.translator.engine]['short']} 로 번역하는 중…")
+
+        def work():
+            try:
+                res = self.translator.translate(text)
+            except translate.TranslateError as e:
+                res = e
+            except Exception as e:  # 예상 못 한 오류도 화면에 알려 줌
+                res = translate.TranslateError(f"번역 중 오류가 났어요: {e}")
+            self.q.put(("translated", (token, res)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_translation(self, res):
+        doc = Doc()
+        if isinstance(res, Exception):
+            doc.line((self.trans_raw[:translate.MAX_CHARS], "src", None))
+            doc.blank()
+            doc.line((str(res), "note", None))
+            doc.blank()
+            doc.line(("→ 파파고 웹 번역에서 열기", "link", "@webtrans"))
+            doc.line(("→ 설정에서 번역 서비스 바꾸기", "link", "@settings"))
+            self._render(self.tabs["trans"], doc)
+            self.status("번역하지 못했어요", C["tag"])
+            self.root.after(8000, self._idle_status)
+            return
+        self.translation = res
+        src_name = translate.LANG_NAMES.get(res.src, res.src)
+        tgt_name = translate.LANG_NAMES.get(res.tgt, res.tgt)
+        doc.line((f"원문 ({src_name})", "sec", None))
+        for para in res.source.split("\n\n"):
+            doc.line((para, "src", None))
+        doc.blank()
+        doc.line((f"번역 ({tgt_name})", "sec", None))
+        for para in res.text.split("\n\n"):
+            doc.line((para, "out", None))
+        doc.blank()
+        if res.truncated:
+            doc.line((f"글이 길어서 앞부분 {translate.MAX_CHARS}자만 번역했어요.", "note", None))
+        doc.line(("번역 결과 복사", "link", "@copytrans"), ("   ·   ", "dim", None),
+                 ("파파고 웹 번역에서 보기", "link", "@webtrans"))
+        doc.line((f"{res.engine_name} 번역 · 문장은 인터넷의 번역 서비스로 보내져요 (단어 검색은 오프라인)", "dim", None))
+        self._render(self.tabs["trans"], doc)
+        self._idle_status()
+
+    def _reset_trans_tab(self):
+        doc = Doc()
+        if self.settings["translate_enabled"]:
+            doc.line(("이 탭을 누르면 지금 단어를 번역 서비스로 번역해요 (인터넷 필요).", "note", None))
+            doc.line(("문장을 드래그하고 단축키를 누르면 바로 번역돼요.", "dim", None))
+        else:
+            doc.line(("번역 기능이 꺼져 있어요. ≡ 메뉴 → 설정에서 켤 수 있어요.", "note", None))
+        self._render(self.tabs["trans"], doc)
+
+    def _on_tab_changed(self, _e=None):
+        """사전 결과를 보다가 '번역' 탭을 누르면 그 단어를 번역"""
+        try:
+            if self.nb.index("current") != 3 or self.mode != "dict" or not self.result:
+                return
+        except tk.TclError:
+            return
+        word = self.result.headword if self.result.found else self.result.query
+        if word and word != self._trans_word and self.settings["translate_enabled"]:
+            self._trans_word = word
+            self.translate_text(word, word_only=True)
+
     def _show_welcome(self):
         hk = self.settings["hotkey"]
         doc = Doc()
@@ -754,11 +894,12 @@ class App:
         doc.line(("2. ", "num", None), ("또는 위 검색창에 직접 입력하거나 붙여넣고 Enter.", "ko", None))
         doc.line(("3. ", "num", None), ("결과 속 단어를 더블클릭하면 그 단어를 찾아요.", "ko", None))
         doc.line(("4. ", "num", None), ("‘웹사전’ 버튼은 네이버 사전 등 포털 검색 결과를 열어요.", "ko", None))
+        doc.line(("5. ", "num", None), ("문장을 드래그하면 번역해요 (인터넷 필요). 입력한 글은 Ctrl+Enter 로 번역.", "ko", None))
         doc.blank()
-        doc.line(("5. ", "num", None), ("✕ · Esc · 다른 곳 클릭 → 결과창이 닫히고 검색창만 남아요.", "ko", None))
-        doc.line(("6. ", "num", None), ("단어장·설정·종료는 검색창 오른쪽 ≡ 메뉴에 있어요.", "ko", None))
+        doc.line(("6. ", "num", None), ("✕ · Esc · 다른 곳 클릭 → 결과창이 닫히고 검색창만 남아요.", "ko", None))
+        doc.line(("7. ", "num", None), ("단어장·설정·종료는 검색창 오른쪽 ≡ 메뉴에 있어요.", "ko", None))
         doc.blank()
-        doc.line(("단축키  ", "sec", None), ("Esc 결과창 닫기 · Ctrl+L 검색창 · Ctrl+1/2/3 탭 이동", "dim", None))
+        doc.line(("단축키  ", "sec", None), ("Esc 결과창 닫기 · Ctrl+L 검색창 · Ctrl+Enter 번역 · Ctrl+1~4 탭 이동", "dim", None))
         self._render(self.tabs["meaning"], doc)
         self.lbl_word.config(text="")
         self.lbl_ipa.config(text="")
@@ -770,6 +911,16 @@ class App:
                 target = self.links[tag]
                 if target == "@web":
                     self.open_web()
+                elif target == "@webtrans":
+                    winsys.open_url(translate.web_url(self.trans_raw))
+                elif target == "@copytrans":
+                    if self.translation:
+                        self.root.clipboard_clear()
+                        self.root.clipboard_append(self.translation.text)
+                        self.status("번역 결과를 복사했어요")
+                        self.root.after(4000, self._idle_status)
+                elif target == "@settings":
+                    self.open_settings()
                 else:
                     self.search(target)
                 return "break"
@@ -810,6 +961,9 @@ class App:
         return clean_query(self.entry_text())
 
     def open_web(self):
+        if self.mode == "trans" and self.trans_raw:
+            winsys.open_url(translate.web_url(self.trans_raw))
+            return
         word = self.current_word() or clean_query(self.entry_text())
         name = self.settings["portal"]
         if word and is_korean(word):
@@ -823,6 +977,10 @@ class App:
         winsys.open_url(tpl.format(q=urllib.parse.quote(word)))
 
     def pronounce(self):
+        if self.mode == "trans" and self.trans_raw:   # 번역 중이면 원문을 읽어 줌
+            if not winsys.speak(self.trans_raw, "ko" if translate.detect_lang(self.trans_raw) == "ko" else "en"):
+                self.status("발음 기능은 Windows 에서만 동작해요")
+            return
         if not self.result or not self.result.found:
             return
         if not winsys.speak(self.result.headword, "ko" if self.result.lang == "ko" else "en"):
@@ -935,6 +1093,10 @@ class App:
                     self.status(val, C["tag"])
                     if self.dict:
                         self.root.after(15000, self._idle_status)
+                elif kind == "translated":
+                    token, res = val
+                    if token == self.trans_token:
+                        self._show_translation(res)
                 elif kind == "db_ready":
                     self._install_db(val)
                 elif kind == "app_update":
@@ -1077,6 +1239,56 @@ class App:
             cbx.state(["disabled"])
         row += 1
 
+        # ── 번역
+        ttk.Separator(win).grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=6)
+        row += 1
+        v_tr = tk.BooleanVar(value=bool(self.settings["translate_enabled"]))
+        ttk.Checkbutton(win, text="문장은 번역하기 (인터넷 필요 · 고른 문장이 번역 서비스로 보내져요)",
+                        variable=v_tr).grid(row=row, column=0, columnspan=2, **pad)
+        row += 1
+        label("번역 서비스")
+        names = {k: v["name"] for k, v in translate.ENGINES.items()}
+        v_eng = tk.StringVar(value=names[self.translator.engine])
+        ttk.Combobox(win, textvariable=v_eng, values=list(names.values()), state="readonly", width=34).grid(
+            row=row, column=1, **pad)
+        row += 1
+        key_box = tk.Frame(win, bg=C["bg"])
+        key_box.grid(row=row, column=0, columnspan=2, sticky="w", padx=12)
+        row += 1
+        key_vars = {k: tk.StringVar(value=self.settings[k] or "")
+                    for k in ("mymemory_email", "deepl_key", "papago_id", "papago_secret", "google_key")}
+        fields = {
+            "mymemory": [("이메일 (선택 · 넣으면 하루 사용량 10배)", "mymemory_email", False)],
+            "deepl": [("DeepL API 키", "deepl_key", True)],
+            "papago": [("파파고 Client ID", "papago_id", False), ("파파고 Client Secret", "papago_secret", True)],
+            "google": [("Google API 키", "google_key", True)],
+        }
+        guides = {
+            "mymemory": ("키 없이 쓸 수 있어요. 하루 약 5,000자까지 무료 (이메일을 넣으면 약 50,000자).", ""),
+            "deepl": ("DeepL 사이트에서 API Free 가입 → 키 복사 (월 50만 자 무료)", "https://www.deepl.com/pro-api"),
+            "papago": ("네이버 클라우드 플랫폼 → Papago Translation 이용 신청 → 키 발급 (유료)",
+                       "https://guide.ncloud-docs.com/docs/papagotranslation-use-apis"),
+            "google": ("Google Cloud → Cloud Translation API 사용 설정 → API 키 만들기",
+                       "https://cloud.google.com/translate/docs/setup"),
+        }
+
+        def show_keys(*_):
+            for w in key_box.winfo_children():
+                w.destroy()
+            eng = next((k for k, n in names.items() if n == v_eng.get()), "mymemory")
+            for i, (text, key, secret) in enumerate(fields[eng]):
+                tk.Label(key_box, text=text, bg=C["bg"], font=self.f["small"]).grid(row=i, column=0, sticky="w", pady=2)
+                ttk.Entry(key_box, textvariable=key_vars[key], width=34, show="•" if secret else "").grid(
+                    row=i, column=1, sticky="w", padx=(8, 0), pady=2)
+            text, url = guides[eng]
+            g = tk.Label(key_box, text=text + ("  (안내 열기)" if url else ""), bg=C["bg"],
+                         fg=C["accent"] if url else C["dim"], font=self.f["small"], cursor="hand2" if url else "")
+            g.grid(row=len(fields[eng]), column=0, columnspan=2, sticky="w", pady=(2, 0))
+            if url:
+                g.bind("<Button-1>", lambda e: winsys.open_url(url))
+        v_eng.trace_add("write", show_keys)
+        show_keys()
+
         ttk.Separator(win).grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=6)
         row += 1
 
@@ -1109,6 +1321,10 @@ class App:
             s["font_size"] = int(v_fs.get())
             for _, key in checks:
                 s[key] = bool(vars_[key].get())
+            s["translate_enabled"] = bool(v_tr.get())
+            s["translate_engine"] = next((k for k, n in names.items() if n == v_eng.get()), "mymemory")
+            for key, var in key_vars.items():
+                s[key] = var.get().strip()
             self.set_topmost(bool(vars_["topmost"].get()))
             if winsys.IS_WIN and v_auto.get() != winsys.get_autostart():
                 winsys.set_autostart(bool(v_auto.get()))

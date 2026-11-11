@@ -73,6 +73,14 @@ DEFAULTS = {
     "next_update_check": "",
     "font_size": 11,
     "welcomed": False,
+    # 문장 번역 (인터넷 필요) — translate.py
+    "translate_enabled": True,       # 문장을 고르면 번역, 사전에 없는 여러 단어도 번역
+    "translate_engine": "mymemory",  # mymemory(무료·키 없음) / deepl / papago / google
+    "mymemory_email": "",            # 넣으면 무료 번역 하루 사용량이 10배
+    "deepl_key": "",
+    "papago_id": "",
+    "papago_secret": "",
+    "google_key": "",
 }
 
 

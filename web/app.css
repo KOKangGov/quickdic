@@ -100,6 +100,15 @@ code { background: var(--chip); padding: 1px 5px; border-radius: 5px; font-size:
 .s-h1 { font-size: 18px; font-weight: 700; }
 .s-link { color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
   text-underline-offset: 3px; cursor: pointer; }
+.s-src { color: var(--tr); }
+.s-out { color: var(--ko); font-size: 17.5px; }
+.doc .ln:has(.s-src), .doc .ln:has(.s-out) { margin-bottom: 6px; }
+.sheet-panel .tr-row { display: flex; gap: 8px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sheet-panel .tr-row input { width: 18px; height: 18px; margin-top: 3px; accent-color: var(--accent); flex: none; }
+.sheet-panel .tr-field { display: grid; gap: 4px; padding: 10px 0; }
+.sheet-panel .tr-field input { font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--text); }
+.sheet-panel .opt:disabled { color: var(--dim); }
 .sugg-list { display: grid; gap: 6px; margin-top: 4px; }
 .sugg-list .s-link { font-size: 18px; text-decoration: none; display: inline-block; padding: 6px 12px; border-radius: 10px; background: var(--accent-soft); }
 

@@ -2,7 +2,7 @@
 // (사전 데이터는 여기서 다루지 않고, 폰 저장소(OPFS)에 따로 저장됨)
 const CACHE = "quickdic-__APP_VERSION__";
 const SHELL = [
-  "./", "index.html", "app.css", "app.js", "dict.js", "fuzzy.js", "worker.js",
+  "./", "index.html", "app.css", "app.js", "dict.js", "fuzzy.js", "worker.js", "translate.js",
   "vendor/sqlite/index.mjs", "vendor/sqlite/sqlite3.wasm", "vendor/pako.esm.mjs",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png",
 ];
